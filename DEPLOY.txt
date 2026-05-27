@@ -1,0 +1,190 @@
+# FabricOS — Complete Setup Guide
+# Stack: FastAPI (Railway) + React (Vercel) + PostgreSQL (Railway)
+# Time needed: ~30 minutes
+
+═══════════════════════════════════════════════════════════
+STEP 1 — INSTALL TOOLS ON YOUR COMPUTER (one time only)
+═══════════════════════════════════════════════════════════
+
+1a. Install Node.js (needed for React)
+    → Go to: https://nodejs.org → Download "LTS" version → Install
+
+1b. Install Python 3.11
+    → Go to: https://python.org/downloads → Install
+    → IMPORTANT: Check "Add Python to PATH" during install
+
+1c. Install Git
+    → Go to: https://git-scm.com/download/win → Install
+
+1d. Sign up for free accounts (if you don't have them):
+    → GitHub:  https://github.com
+    → Railway: https://railway.app  (login with GitHub)
+    → Vercel:  https://vercel.com   (login with GitHub)
+
+
+═══════════════════════════════════════════════════════════
+STEP 2 — SET UP THE PROJECT FOLDER
+═══════════════════════════════════════════════════════════
+
+Open PowerShell (Windows key → type "PowerShell" → Enter)
+
+Run these commands one by one:
+
+  mkdir fabricos
+  cd fabricos
+
+Now copy all the project files into this folder so it looks like:
+  fabricos/
+  ├── backend/
+  └── frontend/
+
+
+═══════════════════════════════════════════════════════════
+STEP 3 — PUSH TO GITHUB
+═══════════════════════════════════════════════════════════
+
+In PowerShell, inside the fabricos/ folder:
+
+  git init
+  git add .
+  git commit -m "Initial FabricOS commit"
+
+Then:
+  → Go to github.com → Click "+" top right → New Repository
+  → Name it: fabricos
+  → Set to Private
+  → Click "Create repository"
+  → Copy the two commands GitHub shows you (they start with "git remote add origin...")
+  → Paste them in PowerShell and run them
+
+
+═══════════════════════════════════════════════════════════
+STEP 4 — DEPLOY BACKEND ON RAILWAY
+═══════════════════════════════════════════════════════════
+
+4a. Go to railway.app → Login with GitHub → New Project
+
+4b. Click "Deploy from GitHub repo" → Select "fabricos"
+    → When asked for the root directory, type: backend
+    → Railway will auto-detect Python
+
+4c. Add PostgreSQL database:
+    → In your Railway project, click "+ New" → Database → PostgreSQL
+    → Railway creates the DB and gives you a DATABASE_URL automatically
+
+4d. Set Environment Variables in Railway:
+    → Click your backend service → Variables tab → Add these:
+
+    DATABASE_URL    = (Railway sets this automatically from the PostgreSQL service)
+    FRONTEND_URL    = https://your-app.vercel.app   ← fill this in after Step 5
+    SECRET_KEY      = any-long-random-text-you-make-up-right-now
+
+4e. Set the Start Command:
+    → Settings tab → Start Command:
+    uvicorn main:app --host 0.0.0.0 --port $PORT
+
+4f. Click Deploy. Wait ~2 minutes.
+    → Railway gives you a URL like: fabricos-backend.up.railway.app
+    → Test it: open https://fabricos-backend.up.railway.app/health
+    → Should show: {"status":"ok"}
+
+4g. Copy your Railway backend URL. You need it in the next step.
+
+
+═══════════════════════════════════════════════════════════
+STEP 5 — DEPLOY FRONTEND ON VERCEL
+═══════════════════════════════════════════════════════════
+
+5a. Open frontend/.env.production in any text editor (Notepad is fine)
+    → Change the URL to your actual Railway backend URL:
+    REACT_APP_API_URL=https://fabricos-backend.up.railway.app
+
+5b. Commit and push this change:
+    (In PowerShell, inside fabricos/ folder)
+    git add .
+    git commit -m "Set production API URL"
+    git push
+
+5c. Go to vercel.com → Login with GitHub → Add New Project
+    → Import your "fabricos" GitHub repo
+    → Set Root Directory to: frontend
+    → Framework Preset: Create React App
+    → Click Deploy
+
+5d. Vercel gives you a URL like: fabricos.vercel.app
+    → Copy it
+
+5e. Go back to Railway → your backend service → Variables
+    → Update FRONTEND_URL = https://fabricos.vercel.app
+    → Railway will redeploy automatically
+
+
+═══════════════════════════════════════════════════════════
+STEP 6 — FIRST LOGIN & SETUP
+═══════════════════════════════════════════════════════════
+
+Open your Vercel URL on any browser or tablet.
+
+Default Admin PIN: 1234
+
+First thing to do:
+  1. Login as Admin (PIN: 1234)
+  2. Go to Users tab → Create accounts for your team:
+     - Your designer (role: designer, give them a PIN)
+     - Your cutting master (role: cutting)
+     - Each tailor (role: tailor, give each a unique PIN)
+     - Your QC person (role: qc)
+  3. Tell each person their PIN
+  4. Go to Admin → Users → change the Admin PIN from 1234 to something private
+
+Then the workflow runs itself:
+  Designer → creates design with photo + rate
+  Cutting Master → records cuts → prints QR codes
+  Tailors → scan QR on their tablet → work → submit
+  QC → scans finished bundle → logs pass/alteration
+  Admin → views payroll every week
+
+
+═══════════════════════════════════════════════════════════
+STEP 7 — RUNNING LOCALLY (FOR TESTING BEFORE DEPLOY)
+═══════════════════════════════════════════════════════════
+
+Backend (PowerShell terminal 1):
+  cd fabricos/backend
+  pip install -r requirements.txt
+  uvicorn main:app --reload
+  → Opens at: http://localhost:8000
+
+Frontend (PowerShell terminal 2):
+  cd fabricos/frontend
+  npm install
+  npm start
+  → Opens at: http://localhost:3000
+
+
+═══════════════════════════════════════════════════════════
+TROUBLESHOOTING
+═══════════════════════════════════════════════════════════
+
+Problem: "Module not found" error in Railway
+→ Make sure Railway root directory is set to "backend"
+
+Problem: Frontend can't reach backend (CORS error)
+→ Check FRONTEND_URL in Railway Variables matches your Vercel URL exactly
+→ No trailing slash: https://fabricos.vercel.app ✓  (not https://fabricos.vercel.app/)
+
+Problem: Page refreshes on Vercel give 404
+→ Make sure vercel.json is inside the frontend/ folder (it should be already)
+
+Problem: Database tables not created
+→ Open Railway → your service → Logs tab
+→ Should show "✅ Default admin seeded — PIN: 1234" on first start
+→ If not, check DATABASE_URL variable is set correctly
+
+Problem: QR codes disappear after Railway restarts
+→ This is expected — Railway /tmp folder resets.
+→ QR codes regenerate automatically when you visit the cutting page.
+→ For permanent QR storage, ask for an S3 upgrade (separate conversation).
+
+When in doubt: paste the error message to Claude. 
+Every error has a fix.
