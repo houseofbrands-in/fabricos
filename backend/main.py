@@ -70,6 +70,8 @@ def health():
 LIGHT_MIGRATIONS = [
     # (table, column, column definition)
     ("qc_logs", "scrapped_qty", "INTEGER DEFAULT 0"),
+    ("fabrics", "composition", "VARCHAR(200)"),
+    ("fabric_intake", "purchase_bill_id", "INTEGER"),
 ]
 
 

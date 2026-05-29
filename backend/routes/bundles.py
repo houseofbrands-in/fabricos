@@ -7,7 +7,7 @@ from database import get_db
 from models import Bundle, Design, FabricConsumption
 from auth import require_roles, get_current_user, User
 from qr_utils import qr_response, generate_qr_png
-from fabric_utils import fabric_live_stock
+from fabric_utils import fabric_live_stock, log_fabric_event
 from bundle_utils import bundle_progress, last_qc_reasons
 
 router = APIRouter(prefix="/bundles", tags=["bundles"])
@@ -71,6 +71,9 @@ def record_cut(
             metres_consumed=metres,
             cut_by=current_user.id,
         ))
+        log_fabric_event(db, design.fabric_id, "issued_cutting",
+                         detail=f"{metres} m for {body.cut_qty} pcs of {design.design_code}",
+                         metres=metres, user_id=current_user.id)
         db.commit()  # commit so live-stock query reflects this consumption
         remaining = fabric_live_stock(db, design.fabric_id)
         fabric_info = {

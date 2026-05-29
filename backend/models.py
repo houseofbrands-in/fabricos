@@ -98,6 +98,7 @@ class Fabric(Base):
     id = Column(Integer, primary_key=True)
     fabric_name = Column(String(200), nullable=False)      # e.g. "Cotton Poplin White 60s"
     fabric_type = Column(String(20), nullable=False)       # grey | dyed
+    composition = Column(String(200))                       # e.g. "100% Cotton, 60s"
     supplier_name = Column(String(200))
     low_stock_threshold = Column(Numeric(10, 2), default=0)  # alert below this many metres
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -108,11 +109,26 @@ class Fabric(Base):
     designs = relationship("Design", back_populates="fabric")
 
 
+class PurchaseBill(Base):
+    """One supplier bill / invoice — can contain several fabrics (each becomes a lot)."""
+    __tablename__ = "purchase_bills"
+    id = Column(Integer, primary_key=True)
+    supplier_name = Column(String(200), nullable=False)
+    invoice_number = Column(String(100))
+    purchase_date = Column(DateTime, default=datetime.utcnow)
+    notes = Column(Text)
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    lots = relationship("FabricIntake", back_populates="bill")
+
+
 class FabricIntake(Base):
-    """One row each time fabric is received (a purchase batch / lot)."""
+    """One received lot. Many lots can belong to one purchase bill."""
     __tablename__ = "fabric_intake"
     id = Column(Integer, primary_key=True)
     fabric_id = Column(Integer, ForeignKey("fabrics.id"))
+    purchase_bill_id = Column(Integer, ForeignKey("purchase_bills.id"), nullable=True)
     lot_code = Column(String(50), unique=True, nullable=False)
     intake_date = Column(DateTime, default=datetime.utcnow)
     metres_received = Column(Numeric(10, 2), nullable=False)
@@ -123,7 +139,9 @@ class FabricIntake(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     fabric = relationship("Fabric", back_populates="intakes")
-    qc = relationship("FabricQC", back_populates="intake", uselist=False)
+    bill = relationship("PurchaseBill", back_populates="lots")
+    qc = relationship("FabricQC", back_populates="intake", uselist=False,
+                      foreign_keys="FabricQC.fabric_intake_id")
 
 
 class FabricQC(Base):
@@ -179,3 +197,40 @@ class FabricConsumption(Base):
 
     fabric = relationship("Fabric", back_populates="consumptions")
     design = relationship("Design")
+
+
+class DefectiveFabric(Base):
+    """Register of rejected fabric — what we decided to do about it (decided later)."""
+    __tablename__ = "defective_fabric"
+    id = Column(Integer, primary_key=True)
+    fabric_id = Column(Integer, ForeignKey("fabrics.id"))
+    fabric_intake_id = Column(Integer, ForeignKey("fabric_intake.id"))
+    metres_rejected = Column(Numeric(10, 2), nullable=False)
+    defect_types = Column(Text)             # JSON array string
+    # pending | return | replacement | downgrade | scrap
+    decision = Column(String(20), default="pending")
+    amount_debited = Column(Numeric(12, 2), nullable=True)   # ₹ debited to vendor (downgrade/return)
+    replacement_intake_id = Column(Integer, ForeignKey("fabric_intake.id"), nullable=True)
+    status = Column(String(20), default="open")              # open | resolved
+    notes = Column(Text)
+    opened_at = Column(DateTime, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+    resolved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    fabric = relationship("Fabric")
+    intake = relationship("FabricIntake", foreign_keys=[fabric_intake_id])
+
+
+class FabricStageHistory(Base):
+    """Append-only timeline of everything that happens to a fabric / lot."""
+    __tablename__ = "fabric_stage_history"
+    id = Column(Integer, primary_key=True)
+    fabric_id = Column(Integer, ForeignKey("fabrics.id"))
+    fabric_intake_id = Column(Integer, ForeignKey("fabric_intake.id"), nullable=True)
+    event = Column(String(40), nullable=False)   # received | qc | issued_cutting | sent_printing ...
+    detail = Column(Text)
+    metres = Column(Numeric(10, 2), nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    fabric = relationship("Fabric")
