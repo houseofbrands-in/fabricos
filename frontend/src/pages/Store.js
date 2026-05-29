@@ -355,23 +355,29 @@ function PurchaseTab({ fabrics, purchases, reload }) {
 /* ─────────────────────────── FABRIC QC TAB ─────────────────────────── */
 function QCTab({ pending, reload }) {
   const [active, setActive] = useState(null);
-  const [accepted, setAccepted] = useState("");
-  const [rejected, setRejected] = useState("");
+  const [rejected, setRejected] = useState("0");
   const [defects, setDefects] = useState([]);
   const [notes, setNotes] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const start = (it) => { setActive(it); setAccepted(String(it.metres_received)); setRejected("0"); setDefects([]); setNotes(""); setMsg(""); };
+  const start = (it) => { setActive(it); setRejected("0"); setDefects([]); setNotes(""); setMsg(""); };
   const toggle = (d) => setDefects(arr => arr.includes(d) ? arr.filter(x => x !== d) : [...arr, d]);
 
+  const received = active ? (parseFloat(active.metres_received) || 0) : 0;
+  const rej = parseFloat(rejected) || 0;
+  const acc = Math.max(0, +(received - rej).toFixed(2));
+  const rejValid = rej >= 0 && rej <= received;
+
   const submit = async (e) => {
-    e.preventDefault(); setLoading(true); setMsg("");
+    e.preventDefault();
+    if (!rejValid) return;
+    setLoading(true); setMsg("");
     try {
       await api.post("/fabric/qc", {
         fabric_intake_id: active.id,
-        metres_accepted: parseFloat(accepted) || 0,
-        metres_rejected: parseFloat(rejected) || 0,
+        metres_accepted: acc,
+        metres_rejected: rej,
         defect_types: defects,
         notes,
       });
@@ -382,7 +388,6 @@ function QCTab({ pending, reload }) {
   };
 
   if (active) {
-    const rej = parseFloat(rejected) || 0;
     return (
       <div style={{ maxWidth: 520 }}>
         <button onClick={() => setActive(null)} style={{ background: "none", border: "none", color: "#6c757d", cursor: "pointer", fontSize: 13, marginBottom: 12, display: "flex", alignItems: "center", gap: 4 }}><ArrowLeft size={14} /> Back to pending</button>
@@ -393,14 +398,14 @@ function QCTab({ pending, reload }) {
             <div style={{ background: "#f8f9fc", borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: "#495057" }}>
               Received in this lot: <b>{active.metres_received} m</b>{active.num_rolls ? ` across ${active.num_rolls} rolls` : ""}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-              <div><label style={S.label}>Metres Accepted</label>
-                <input style={{ ...S.input, fontSize: 20, fontWeight: 800 }} type="number" step="0.01" min="0" value={accepted}
-                  onChange={e => setAccepted(e.target.value)} required /></div>
-              <div><label style={S.label}>Metres Rejected</label>
-                <input style={{ ...S.input, fontSize: 20, fontWeight: 800 }} type="number" step="0.01" min="0" value={rejected}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 8 }}>
+              <div><label style={S.label}>Metres Rejected (defective)</label>
+                <input style={{ ...S.input, fontSize: 20, fontWeight: 800, borderColor: rejValid ? "#dee2e6" : "#b71c1c" }} type="number" step="0.01" min="0" max={received} value={rejected}
                   onChange={e => setRejected(e.target.value)} /></div>
+              <div><label style={S.label}>Accepted → enters stock</label>
+                <div style={{ ...S.input, fontSize: 20, fontWeight: 800, background: "#f1f8f4", color: "#1b5e20", border: "1.5px solid #c8e6c9" }}>{acc} m</div></div>
             </div>
+            {!rejValid && <div style={{ fontSize: 12, color: "#b71c1c", fontWeight: 600, marginBottom: 12 }}>Rejected can't be more than the {received} m received.</div>}
             <div style={{ marginBottom: 16 }}>
               <label style={S.label}>Defect Types (if any)</label>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -423,7 +428,7 @@ function QCTab({ pending, reload }) {
               <label style={S.label}>Notes (optional)</label>
               <input style={S.input} value={notes} onChange={e => setNotes(e.target.value)} placeholder="any remarks" />
             </div>
-            <button type="submit" style={{ ...S.btn, width: "100%", opacity: loading ? 0.7 : 1 }} disabled={loading}>
+            <button type="submit" style={{ ...S.btn, width: "100%", opacity: (loading || !rejValid) ? 0.6 : 1 }} disabled={loading || !rejValid}>
               {loading ? "Saving..." : "Submit QC — only accepted metres enter stock"}
             </button>
           </form>
@@ -475,7 +480,7 @@ function DefectiveTab({ defective, reload }) {
   const open = defective.filter(d => d.status === "open");
   const resolved = defective.filter(d => d.status === "resolved");
 
-  const start = (d) => { setResolving(d); setForm({ decision: "return", amount_debited: "", notes: "" }); setMsg(""); };
+  const start = (d) => { setResolving(d); setForm({ decision: "return", amount_debited: d.suggested_debit ? String(d.suggested_debit) : "", notes: "" }); setMsg(""); };
 
   const submit = async (e) => {
     e.preventDefault(); setLoading(true); setMsg("");
@@ -518,6 +523,11 @@ function DefectiveTab({ defective, reload }) {
                 <label style={S.label}>Amount debited to vendor (₹, optional)</label>
                 <input style={S.input} type="number" step="0.01" min="0" placeholder="e.g. 400" value={form.amount_debited}
                   onChange={e => setForm(f => ({ ...f, amount_debited: e.target.value }))} />
+                {resolving.cost_per_metre > 0 && (
+                  <div style={{ fontSize: 11, color: "#adb5bd", marginTop: 4 }}>
+                    Purchase value: {resolving.metres_rejected} m × ₹{resolving.cost_per_metre} = ₹{resolving.suggested_debit} (pre-filled, editable)
+                  </div>
+                )}
               </div>
             )}
             {form.decision === "downgrade" && (

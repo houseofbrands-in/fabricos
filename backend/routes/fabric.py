@@ -349,8 +349,16 @@ def submit_fabric_qc(
 
     accepted = max(0.0, body.metres_accepted or 0)
     rejected = max(0.0, body.metres_rejected or 0)
+    received = float(intake.metres_received or 0)
     if accepted == 0 and rejected == 0:
         raise HTTPException(400, "Enter accepted and/or rejected metres")
+    # Accepted + rejected must equal what was received — never more, never less.
+    if abs((accepted + rejected) - received) > 0.05:
+        raise HTTPException(
+            400,
+            f"Accepted + rejected = {round(accepted + rejected, 2)} m, "
+            f"but this lot received {round(received, 2)} m. They must match.",
+        )
 
     result = "accept" if rejected == 0 else "reject" if accepted == 0 else "partial"
 
@@ -411,12 +419,16 @@ def list_defective(
     rows = q.order_by(DefectiveFabric.opened_at.desc()).all()
     out = []
     for d in rows:
+        rate = float(d.intake.cost_per_metre or 0) if d.intake else 0
+        rejected = float(d.metres_rejected or 0)
         out.append({
             "id": d.id,
             "fabric_id": d.fabric_id,
             "fabric_name": d.fabric.fabric_name if d.fabric else None,
             "lot_code": d.intake.lot_code if d.intake else None,
             "metres_rejected": _f(d.metres_rejected),
+            "cost_per_metre": rate,
+            "suggested_debit": round(rejected * rate, 2),
             "defect_types": json.loads(d.defect_types) if d.defect_types else [],
             "decision": d.decision,
             "amount_debited": _f(d.amount_debited),
