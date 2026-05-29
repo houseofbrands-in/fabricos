@@ -21,6 +21,7 @@
 | Role | PIN | First Login Action |
 |---|---|---|
 | Admin | 1234 | Change this immediately in Users tab |
+| Store (storekeeper) | 1111 | Change this immediately in Users tab |
 
 ---
 
@@ -49,7 +50,8 @@ Fabric Order → Fabric QC → [Printing / Embroidery / Direct] → Re-QC → Cu
 | QC | `qc` | Scan finished bundle, enter passed qty + alteration qty, select reasons |
 | Ironing | `ironing` | Scan QC-passed bundle, mark as ironed |
 | Packing | `packing` | Scan ironed bundle, enter size breakup (S/M/L/XL), enter carton no, mark as packed |
-| Admin | `admin` | WIP dashboard, tailor performance, weekly payroll, user management |
+| Fabric Store | `store` | Manage fabrics, record intake, fabric QC, send/receive job work, live stock (Phase 2) |
+| Admin | `admin` | WIP dashboard, tailor performance, weekly payroll, user management, fabric overview |
 
 **Bundle flow (statuses):**
 ```
@@ -71,22 +73,32 @@ cut → in_progress → qc_pending → passed → ironing → packed
 
 ## 🗺️ Full Roadmap (All Phases)
 
-### Phase 2 — Fabric Module (NEXT)
-> Track fabric from purchase to cutting. Know exactly how much fabric you have, what's been sent for job work, and what's been consumed.
+### Phase 2 — Fabric Module (COMPLETE ✅)
+> Tracks fabric from purchase → incoming QC → job work → cutting. Live stock is always
+> computed fresh from events (never stored), so the number can never drift.
 
-**Tables to add:**
-- `fabrics` — fabric name, type (grey/dyed), supplier
-- `fabric_intake` — purchase date, metres received, cost per metre, roll IDs
-- `fabric_qc` — incoming QC check per roll (accept/reject/partial)
-- `job_work` — sent to printer/embroiderer, metres out, metres returned, shrinkage %
-- `fabric_consumption` — metres consumed per design per cutting session
+**Tables added:** `fabrics`, `fabric_intake`, `fabric_qc`, `job_work`, `fabric_consumption`
+(plus two new optional columns on `designs`: `fabric_id`, `metres_per_piece`).
 
-**Features:**
-- Each design gets a "fabric requirement" (metres per piece)
-- System auto-deducts fabric when cutting master records a cut
-- Low stock alert when fabric balance drops below threshold
-- Job work tracking: vendor name, date sent, date returned, loss recorded
-- Fabric QC: defect types (shade variation, weave defect, width short)
+**Live stock formula (computed, never stored):**
+```
+available = accepted_in        (metres that passed incoming QC)
+          - at_vendor          (metres currently out at a job-work vendor)
+          - shrinkage_lost     (metres permanently lost on returned job work)
+          - consumed           (metres used by cutting)
+```
+
+**What the storekeeper (`store` role) can do — Fabric Store page, 4 tabs:**
+- **Fabrics** — add a fabric (grey/dyed, supplier, low-stock alert level); see live stock per fabric with full breakdown (available / at vendor / consumed / shrinkage) and low-stock highlighting
+- **Intake** — record a purchase lot (unique lot code, metres, rolls, cost/metre → auto total cost); intake history with QC status
+- **Fabric QC** — inspect a received lot, accept/reject metres, tag defects (shade variation / weave defect / width short). **Only accepted metres enter stock.** Result auto-set to accept / partial / reject
+- **Job Work** — send fabric to a printing/embroidery vendor (stock drops immediately); receive it back recording metres returned → system computes shrinkage metres + %; full job-work history
+
+**Design + Cutting integration:**
+- A designer can attach a fabric + metres-per-piece to any design (optional — old designs keep working untouched)
+- When the cutting master records a cut, the system **auto-deducts** fabric (metres/piece × pieces cut) and shows metres consumed + remaining stock
+- If a cut would push stock below zero it **warns but never blocks** the floor (cutting must never be held up)
+- The cutting screen shows the design's fabric, live stock, and metres this cut needs (with a "not enough" hint)
 
 ### Phase 3 — Dispatch Module
 > Track what leaves the factory. Generate packing slips. Handle both B2C and FOB orders.
@@ -139,6 +151,7 @@ fabricos/
 │   ├── database.py                 → PostgreSQL connection, SessionLocal, create_tables()
 │   ├── auth.py                     → JWT token creation/decode, PIN hashing, role guards
 │   ├── qr_utils.py                 → QR code PNG generation (saved to /tmp)
+│   ├── fabric_utils.py             → Live fabric-stock maths (computed, never stored)
 │   ├── requirements.txt            → Python dependencies
 │   └── routes/
 │       ├── auth.py                 → POST /auth/login, /auth/select, GET /auth/me
@@ -172,7 +185,8 @@ fabricos/
 │           ├── QC.js               → Scan bundle, pass/fail entry, alteration reasons
 │           ├── Ironing.js          → Scan QC-passed bundle, mark as ironed
 │           ├── Packing.js          → Scan ironed bundle, size breakup, packing summary
-│           └── Admin.js            → WIP dashboard, performance, payroll, user management
+│           ├── Admin.js            → WIP dashboard, performance, payroll, user management
+│           └── Store.js            → Fabric Store: fabrics, intake, fabric QC, job work (Phase 2)
 │
 └── README.md                       → This file — always updated after each session
 ```
@@ -184,11 +198,12 @@ fabricos/
 ```
 users
   id, name, role, pin_hash, is_active, created_at
-  roles: admin | designer | cutting | tailor | qc | ironing | packing
+  roles: admin | designer | cutting | tailor | qc | ironing | packing | store
 
 designs
   id, created_by (→users), design_name, design_code (unique),
-  image_url, stitch_rate, target_qty, status, created_at
+  image_url, stitch_rate, target_qty, status, created_at,
+  fabric_id (→fabrics, nullable), metres_per_piece (nullable)   ← Phase 2
 
 bundles
   id, design_id (→designs), bundle_code (unique), qty,
@@ -205,9 +220,47 @@ qc_logs
   alteration_reasons (JSON string), checked_at
 ```
 
-**Tables to be added in Phase 2:**
+**Phase 2 fabric tables (BUILT):**
 ```
-fabrics, fabric_intake, fabric_qc, job_work, fabric_consumption
+fabrics
+  id, fabric_name, fabric_type (grey|dyed), supplier_name,
+  low_stock_threshold, created_at
+
+fabric_intake
+  id, fabric_id (→fabrics), lot_code (unique), intake_date,
+  metres_received, num_rolls, cost_per_metre, total_cost, notes, created_at
+
+fabric_qc
+  id, fabric_intake_id (→fabric_intake), qc_by (→users),
+  metres_checked, metres_accepted, metres_rejected,
+  result (accept|partial|reject), defect_types (JSON string), notes, checked_at
+
+job_work
+  id, fabric_id (→fabrics), design_id (→designs, nullable),
+  job_type (printing|embroidery), vendor_name, date_sent, metres_sent,
+  date_returned, metres_returned, shrinkage_metres, shrinkage_percent,
+  re_qc_by (→users), status (sent|returned), notes, created_at
+
+fabric_consumption
+  id, design_id (→designs), fabric_id (→fabrics),
+  pieces_cut, metres_consumed, cut_by (→users), consumed_at
+```
+
+**Fabric API (all under /fabric):**
+```
+GET  /fabric/                 list fabrics + live stock + low-stock flag   (any logged-in user)
+POST /fabric/                 create fabric                                (store|admin)
+GET  /fabric/stock            compact stock summary + low-stock list       (any logged-in user)
+GET  /fabric/{id}             fabric detail + stock breakdown              (any logged-in user)
+POST /fabric/intake           record a purchase lot                        (store|admin)
+GET  /fabric/intake/list      intake history (optional ?fabric_id=)        (any logged-in user)
+GET  /fabric/qc/pending       lots awaiting incoming QC                    (any logged-in user)
+POST /fabric/qc               submit incoming QC (only accepted enters stock) (store|admin)
+POST /fabric/job-work         send fabric to a vendor                      (store|admin)
+POST /fabric/job-work/{id}/return   receive back + auto shrinkage          (store|admin)
+GET  /fabric/job-work/list    job-work history (optional ?status=)         (any logged-in user)
+
+PATCH /designs/{id}/fabric    set/update a design's fabric + metres/piece  (designer|admin)
 ```
 
 ---
@@ -261,10 +314,11 @@ git push
 |---|---|---|
 | Session 1 | May 2026 | Full project setup: FastAPI backend, React frontend, PostgreSQL on Railway, Vercel deploy. Roles: designer, cutting, tailor, qc, admin. Core bundle flow: cut → stitch → qc → payroll. |
 | Session 2 | May 2026 | Phase 1 complete: Ironing stage, Packing stage with size breakup + packing summary. New roles: ironing, packing. WIP dashboard updated to 7 stages. Edit user PIN feature added. |
+| Session 3 | May 2026 | **Phase 2 complete: Fabric Module.** 5 new tables (fabrics, fabric_intake, fabric_qc, job_work, fabric_consumption) + fabric_id/metres_per_piece on designs. New `store` role + Fabric Store page (Fabrics / Intake / Fabric QC / Job Work tabs). Live stock computed from events. Auto fabric deduction at cutting (warns, never blocks). Job-work shrinkage tracking. Designer can set fabric/piece; cutting screen shows live stock + metres needed. Backend smoke-tested end-to-end. |
 
 ---
 
-## 🤖 Prompt for Next Claude Session (Phase 2 — Fabric Module)
+## 🤖 Prompt for Next Claude Session (Phase 3 — Dispatch Module)
 
 > Copy this entire block and paste it at the start of your next Claude conversation.
 > Also upload this README.md file so Claude has full context.
@@ -285,30 +339,32 @@ My GitHub repo: https://github.com/houseofbrands-in/fabricos
 Backend live at: https://fabricos-production.up.railway.app
 Frontend live at: https://fabricos-eight.vercel.app
 
+The repo may be PRIVATE. If you cannot read it, I will make it public
+for a few minutes so you can read my actual code, then I will make it
+private again. Please always read my real code before changing anything.
+
 I deploy by pushing to GitHub — Railway and Vercel auto-deploy.
 I work in VS Code on Windows. My projects are at C:\Users\ASUS\Projects\fabricos
 
-Today I want to build Phase 2: Fabric Module.
+Phases 1 and 2 are COMPLETE:
+- Phase 1: Design → Cut → Stitch → QC → Iron → Pack, payroll, admin (roles:
+  designer, cutting, tailor, qc, ironing, packing, admin)
+- Phase 2: Fabric Module (role: store) — fabrics, intake, fabric QC, job work,
+  live stock, auto fabric deduction at cutting
 
-Phase 2 scope (from README):
-- Track fabric from purchase to cutting
-- Tables: fabrics, fabric_intake, fabric_qc, job_work, fabric_consumption
-- Each design gets a fabric requirement (metres per piece)
-- System auto-deducts when cutting master records a cut
-- Job work tracking: sent to printer/embroiderer, metres returned, shrinkage %
-- Fabric QC: incoming check per roll (accept/partial/reject), defect types
+Today I want to build Phase 3: Dispatch Module.
 
-My factory process for fabric:
-1. We source grey or dyed fabric from the market
-2. Some designs need printing (sent to external printing unit)
-3. Some designs need embroidery (sent to external embroidery unit)
-4. Some go direct to cutting
-5. When fabric comes back from job work, we do a re-QC (shrinkage happens here)
-6. Then fabric goes to cutting master
+Phase 3 scope (from README):
+- Track what leaves the factory; generate packing slips; handle B2C and FOB orders
+- Tables: orders (B2C/FOB, client, date, qty), dispatch_notes (bundles dispatched,
+  date, courier), packing_slips (PDF with design, qty, sizes, carton details)
+- Link packed bundles to outgoing orders
+- Separate B2C (warehouse/3PL) vs FOB (direct to client) flows
+- Dispatch history per design; outstanding order fulfilment status
 
 Please:
 1. First confirm you have read the README and understand the current system
-2. Show me what new database tables you will add (just the schema first, no code yet)
+2. Show me what new database tables you will add (just the schema first, no code)
 3. Wait for my approval before writing any code
 4. After we finish, update the README.md session log with what we built today
 
@@ -318,6 +374,10 @@ Important rules for our sessions:
 - After each session, update README.md with what was built
 - Never break existing features — only add new ones
 - If something might break existing code, warn me first
+- Backend has a /home/claude-style fresh DB note: new tables auto-create on
+  startup, but NEW COLUMNS on existing tables do NOT get added automatically by
+  SQLAlchemy create_all — so if you add columns to an existing table, tell me to
+  reset the database (the system is not yet holding real production data)
 ```
 
 ---

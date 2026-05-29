@@ -9,7 +9,8 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
-    role = Column(String(20), nullable=False)  # admin | designer | cutting | tailor | qc
+    # admin | designer | cutting | tailor | qc | ironing | packing | store
+    role = Column(String(20), nullable=False)
     pin_hash = Column(String(128), nullable=False)
     is_active = Column(Integer, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -31,8 +32,13 @@ class Design(Base):
     status = Column(String(20), default="active")
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # ── Phase 2: Fabric link (both optional — old designs keep working) ──
+    fabric_id = Column(Integer, ForeignKey("fabrics.id"), nullable=True)
+    metres_per_piece = Column(Numeric(10, 3), nullable=True)
+
     creator = relationship("User", back_populates="designs")
     bundles = relationship("Bundle", back_populates="design")
+    fabric = relationship("Fabric", back_populates="designs")
 
 
 class Bundle(Base):
@@ -41,7 +47,7 @@ class Bundle(Base):
     design_id = Column(Integer, ForeignKey("designs.id"))
     bundle_code = Column(String(50), unique=True, nullable=False)
     qty = Column(Integer, nullable=False)
-    # cut | in_progress | qc_pending | passed | alteration
+    # cut | in_progress | qc_pending | passed | alteration | ironing | packed
     status = Column(String(20), default="cut")
     qr_url = Column(String(500))
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -79,3 +85,96 @@ class QCLog(Base):
     bundle = relationship("Bundle", back_populates="qc_logs")
     tailor_job = relationship("TailorJob", back_populates="qc_logs")
     inspector = relationship("User", back_populates="qc_logs")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PHASE 2 — FABRIC MODULE
+# ════════════════════════════════════════════════════════════════════════════
+
+class Fabric(Base):
+    """Master list of every fabric the factory buys."""
+    __tablename__ = "fabrics"
+    id = Column(Integer, primary_key=True)
+    fabric_name = Column(String(200), nullable=False)      # e.g. "Cotton Poplin White 60s"
+    fabric_type = Column(String(20), nullable=False)       # grey | dyed
+    supplier_name = Column(String(200))
+    low_stock_threshold = Column(Numeric(10, 2), default=0)  # alert below this many metres
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    intakes = relationship("FabricIntake", back_populates="fabric")
+    job_works = relationship("JobWork", back_populates="fabric")
+    consumptions = relationship("FabricConsumption", back_populates="fabric")
+    designs = relationship("Design", back_populates="fabric")
+
+
+class FabricIntake(Base):
+    """One row each time fabric is received (a purchase batch / lot)."""
+    __tablename__ = "fabric_intake"
+    id = Column(Integer, primary_key=True)
+    fabric_id = Column(Integer, ForeignKey("fabrics.id"))
+    lot_code = Column(String(50), unique=True, nullable=False)
+    intake_date = Column(DateTime, default=datetime.utcnow)
+    metres_received = Column(Numeric(10, 2), nullable=False)
+    num_rolls = Column(Integer, default=0)
+    cost_per_metre = Column(Numeric(10, 2), default=0)
+    total_cost = Column(Numeric(12, 2), default=0)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    fabric = relationship("Fabric", back_populates="intakes")
+    qc = relationship("FabricQC", back_populates="intake", uselist=False)
+
+
+class FabricQC(Base):
+    """Incoming inspection of a received lot. Only ACCEPTED metres enter stock."""
+    __tablename__ = "fabric_qc"
+    id = Column(Integer, primary_key=True)
+    fabric_intake_id = Column(Integer, ForeignKey("fabric_intake.id"))
+    qc_by = Column(Integer, ForeignKey("users.id"))
+    metres_checked = Column(Numeric(10, 2), default=0)
+    metres_accepted = Column(Numeric(10, 2), default=0)
+    metres_rejected = Column(Numeric(10, 2), default=0)
+    result = Column(String(20))            # accept | partial | reject
+    defect_types = Column(Text)            # JSON array string
+    notes = Column(Text)
+    checked_at = Column(DateTime, default=datetime.utcnow)
+
+    intake = relationship("FabricIntake", back_populates="qc")
+
+
+class JobWork(Base):
+    """Fabric sent out to a printer / embroiderer and (later) returned."""
+    __tablename__ = "job_work"
+    id = Column(Integer, primary_key=True)
+    fabric_id = Column(Integer, ForeignKey("fabrics.id"))
+    design_id = Column(Integer, ForeignKey("designs.id"), nullable=True)
+    job_type = Column(String(20))          # printing | embroidery
+    vendor_name = Column(String(200))
+    date_sent = Column(DateTime, default=datetime.utcnow)
+    metres_sent = Column(Numeric(10, 2), nullable=False)
+    date_returned = Column(DateTime, nullable=True)
+    metres_returned = Column(Numeric(10, 2), nullable=True)
+    shrinkage_metres = Column(Numeric(10, 2), nullable=True)
+    shrinkage_percent = Column(Numeric(6, 2), nullable=True)
+    re_qc_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status = Column(String(20), default="sent")  # sent | returned
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    fabric = relationship("Fabric", back_populates="job_works")
+    design = relationship("Design")
+
+
+class FabricConsumption(Base):
+    """Fabric used up when the cutting master records a cut."""
+    __tablename__ = "fabric_consumption"
+    id = Column(Integer, primary_key=True)
+    design_id = Column(Integer, ForeignKey("designs.id"))
+    fabric_id = Column(Integer, ForeignKey("fabrics.id"))
+    pieces_cut = Column(Integer, nullable=False)
+    metres_consumed = Column(Numeric(10, 2), nullable=False)
+    cut_by = Column(Integer, ForeignKey("users.id"))
+    consumed_at = Column(DateTime, default=datetime.utcnow)
+
+    fabric = relationship("Fabric", back_populates="consumptions")
+    design = relationship("Design")

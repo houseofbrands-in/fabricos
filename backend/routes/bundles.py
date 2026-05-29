@@ -4,9 +4,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Bundle, Design
+from models import Bundle, Design, FabricConsumption
 from auth import require_roles, get_current_user, User
 from qr_utils import qr_response, generate_qr_png
+from fabric_utils import fabric_live_stock
 
 router = APIRouter(prefix="/bundles", tags=["bundles"])
 
@@ -58,8 +59,34 @@ def record_cut(
         db.add(b)
         created.append(code)
 
-    db.commit()
-    return {"created": len(created), "bundle_codes": created}
+    # ── Phase 2: auto-deduct fabric (only if this design has fabric info) ──
+    fabric_info = None
+    if design.fabric_id and design.metres_per_piece:
+        metres = round(float(design.metres_per_piece) * body.cut_qty, 2)
+        db.add(FabricConsumption(
+            design_id=design.id,
+            fabric_id=design.fabric_id,
+            pieces_cut=body.cut_qty,
+            metres_consumed=metres,
+            cut_by=current_user.id,
+        ))
+        db.commit()  # commit so live-stock query reflects this consumption
+        remaining = fabric_live_stock(db, design.fabric_id)
+        fabric_info = {
+            "fabric_id": design.fabric_id,
+            "fabric_name": design.fabric.fabric_name if design.fabric else None,
+            "metres_per_piece": float(design.metres_per_piece),
+            "metres_consumed": metres,
+            "remaining": remaining,
+            "warning": (
+                f"Fabric stock is now {remaining} m (below zero). "
+                "Please check intake / job-work records."
+            ) if remaining < 0 else None,
+        }
+    else:
+        db.commit()
+
+    return {"created": len(created), "bundle_codes": created, "fabric": fabric_info}
 
 
 @router.get("/qr/{bundle_code}")

@@ -18,6 +18,7 @@ from routes.qc import router as qc_router
 from routes.admin import router as admin_router
 from routes.ironing import router as ironing_router
 from routes.packing import router as packing_router
+from routes.fabric import router as fabric_router
 
 app = FastAPI(title="FabricOS API", version="1.0.0")
 
@@ -40,6 +41,7 @@ app.include_router(qc_router)
 app.include_router(admin_router)
 app.include_router(ironing_router)
 app.include_router(packing_router)
+app.include_router(fabric_router)
 
 
 # File serving (uploads + QR codes from /tmp)
@@ -72,5 +74,10 @@ def startup():
             db.add(admin)
             db.commit()
             print("✅ Default admin seeded — PIN: 1234")
+        if not db.query(User).filter_by(role="store").first():
+            store = User(name="Store", role="store", pin_hash=hash_pin("1111"))
+            db.add(store)
+            db.commit()
+            print("✅ Default storekeeper seeded — PIN: 1111")
     finally:
         db.close()

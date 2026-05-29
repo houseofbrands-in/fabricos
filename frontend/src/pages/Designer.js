@@ -13,13 +13,15 @@ const S = {
 
 export default function Designer() {
   const [designs, setDesigns] = useState([]);
-  const [form, setForm] = useState({ design_name: "", design_code: "", stitch_rate: "", target_qty: "" });
+  const [fabrics, setFabrics] = useState([]);
+  const [form, setForm] = useState({ design_name: "", design_code: "", stitch_rate: "", target_qty: "", fabric_id: "", metres_per_piece: "" });
   const [image, setImage] = useState(null);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
   const load = () => api.get("/designs/").then((r) => setDesigns(r.data));
-  useEffect(() => { load(); }, []);
+  const loadFabrics = () => api.get("/fabric/").then((r) => setFabrics(r.data)).catch(() => setFabrics([]));
+  useEffect(() => { load(); loadFabrics(); }, []);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -27,11 +29,15 @@ export default function Designer() {
     setMsg("");
     try {
       const fd = new FormData();
-      Object.entries(form).forEach(([k, v]) => fd.append(k, v));
+      Object.entries(form).forEach(([k, v]) => {
+        // only send fabric fields when actually filled in
+        if ((k === "fabric_id" || k === "metres_per_piece") && (v === "" || v == null)) return;
+        fd.append(k, v);
+      });
       if (image) fd.append("image", image);
       await api.post("/designs/", fd, { headers: { "Content-Type": "multipart/form-data" } });
       setMsg("Design created!");
-      setForm({ design_name: "", design_code: "", stitch_rate: "", target_qty: "" });
+      setForm({ design_name: "", design_code: "", stitch_rate: "", target_qty: "", fabric_id: "", metres_per_piece: "" });
       setImage(null);
       load();
     } catch (e) {
@@ -76,6 +82,25 @@ export default function Designer() {
                   onChange={e => setForm(f => ({ ...f, target_qty: e.target.value }))} required />
               </div>
             </div>
+            <div style={{ background: "#f8f9fc", border: "1px dashed #dee2e6", borderRadius: 10, padding: 12, marginBottom: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#5d4037", marginBottom: 8 }}>FABRIC REQUIREMENT (optional)</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={S.label}>Fabric</label>
+                  <select style={S.input} value={form.fabric_id}
+                    onChange={e => setForm(f => ({ ...f, fabric_id: e.target.value }))}>
+                    <option value="">None</option>
+                    {fabrics.map(fb => <option key={fb.id} value={fb.id}>{fb.fabric_name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={S.label}>Metres / piece</label>
+                  <input style={S.input} type="number" step="0.001" min="0" placeholder="1.5" value={form.metres_per_piece}
+                    onChange={e => setForm(f => ({ ...f, metres_per_piece: e.target.value }))} />
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "#adb5bd", marginTop: 6 }}>Used to auto-deduct fabric stock when cutting records a cut.</div>
+            </div>
             <div style={{ marginBottom: 18 }}>
               <label style={S.label}>Product Image (optional)</label>
               <input type="file" accept="image/*" style={{ fontSize: 13 }} onChange={e => setImage(e.target.files[0])} />
@@ -99,7 +124,7 @@ export default function Designer() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                 <thead>
                   <tr style={{ background: "#f8f9fc" }}>
-                    {["Design", "Code", "Rate", "Target", "Bundles Cut"].map(h => (
+                    {["Design", "Code", "Rate", "Target", "Fabric", "Bundles Cut"].map(h => (
                       <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 12, fontWeight: 700, color: "#6c757d" }}>{h}</th>
                     ))}
                   </tr>
@@ -119,6 +144,11 @@ export default function Designer() {
                       <td style={{ padding: "12px 16px", fontFamily: "monospace", fontSize: 13 }}>{d.design_code}</td>
                       <td style={{ padding: "12px 16px", fontWeight: 700, color: "#1b5e20" }}>₹{d.stitch_rate}</td>
                       <td style={{ padding: "12px 16px" }}>{d.target_qty}</td>
+                      <td style={{ padding: "12px 16px", fontSize: 12 }}>
+                        {d.fabric_name
+                          ? <span style={{ color: "#5d4037" }}>{d.fabric_name}<br/><span style={{ color: "#adb5bd" }}>{d.metres_per_piece} m/pc</span></span>
+                          : <span style={{ color: "#ced4da" }}>—</span>}
+                      </td>
                       <td style={{ padding: "12px 16px" }}>
                         <span style={{ background: "#e8f4fd", color: "#1565c0", borderRadius: 20, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>
                           {d.bundle_count} bundles · {d.cut_qty} pcs

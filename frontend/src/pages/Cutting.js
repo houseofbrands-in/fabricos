@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
-import { Scissors, QrCode, Printer, ChevronRight } from "lucide-react";
+import { Scissors, QrCode, Printer, ChevronRight, Layers, AlertTriangle } from "lucide-react";
 
 const STATUS_STYLE = {
   cut: { background: "#e8f4fd", color: "#1565c0" },
@@ -19,8 +19,16 @@ export default function Cutting() {
   const [bundleSize, setBundleSize] = useState(10);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
+  const [fabrics, setFabrics] = useState([]);
 
-  useEffect(() => { api.get("/designs/").then(r => setDesigns(r.data)); }, []);
+  const loadDesigns = () => api.get("/designs/").then(r => setDesigns(r.data));
+  const loadFabrics = () => api.get("/fabric/").then(r => setFabrics(r.data)).catch(() => setFabrics([]));
+  useEffect(() => { loadDesigns(); loadFabrics(); }, []);
+
+  const selFabric = selected && selected.fabric_id
+    ? fabrics.find(f => f.id === selected.fabric_id) : null;
+  const metresNeeded = (selected && selected.metres_per_piece && parseInt(cutQty))
+    ? +(selected.metres_per_piece * parseInt(cutQty)).toFixed(2) : null;
 
   const loadBundles = (designId) => {
     api.get(`/bundles/?design_id=${designId}`).then(r => setBundles(r.data));
@@ -48,9 +56,15 @@ export default function Cutting() {
         cut_qty: parseInt(cutQty),
         bundle_size: parseInt(bundleSize),
       });
-      setMsg(`✅ ${data.created} bundles created!`);
+      let m = `✅ ${data.created} bundles created!`;
+      if (data.fabric) {
+        m += ` Fabric used: ${data.fabric.metres_consumed} m · stock left: ${data.fabric.remaining} m`;
+        if (data.fabric.warning) m = `⚠️ ${data.created} bundles created, BUT ${data.fabric.warning}`;
+      }
+      setMsg(m);
       setCutQty("");
       loadBundles(selected.id);
+      loadFabrics();
     } catch (e) {
       setMsg(e.response?.data?.detail || "Error");
     } finally {
@@ -94,7 +108,21 @@ export default function Cutting() {
                 <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}><Scissors size={15} style={{ marginRight: 6 }} />Record Cut — {selected.design_name}</h3>
               </div>
               <form onSubmit={recordCut} style={{ padding: 20 }}>
-                {msg && <div style={{ background: msg.startsWith("✅") ? "#d1f5ea" : "#ffe0e3", borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: 13, color: msg.startsWith("✅") ? "#1b5e20" : "#b71c1c" }}>{msg}</div>}
+                {selected.fabric_id && (
+                  <div style={{ background: selFabric && selFabric.low_stock ? "#fff8f8" : "#f8f9fc", border: "1px solid " + (selFabric && selFabric.low_stock ? "#f5c2c7" : "#e9ecef"), borderRadius: 10, padding: 12, marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <div style={{ fontSize: 13, color: "#495057" }}>
+                      <Layers size={14} style={{ verticalAlign: -2, marginRight: 4, color: "#5d4037" }} />
+                      <b>{selected.fabric_name}</b> · {selected.metres_per_piece} m/piece
+                    </div>
+                    <div style={{ fontSize: 13 }}>
+                      Stock: <b style={{ color: selFabric && selFabric.low_stock ? "#b71c1c" : "#1b5e20" }}>{selFabric ? selFabric.available + " m" : "…"}</b>
+                      {metresNeeded != null && <span style={{ color: "#6c757d" }}> · this cut needs <b>{metresNeeded} m</b></span>}
+                      {selFabric && metresNeeded != null && metresNeeded > selFabric.available &&
+                        <span style={{ color: "#b71c1c", fontWeight: 700, marginLeft: 6 }}><AlertTriangle size={12} style={{ verticalAlign: -1 }} /> not enough</span>}
+                    </div>
+                  </div>
+                )}
+                {msg && <div style={{ background: msg.startsWith("✅") ? "#d1f5ea" : "#fff3cd", borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: 13, color: msg.startsWith("✅") ? "#1b5e20" : "#7a5b00" }}>{msg}</div>}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
                   <div>
                     <label style={{ fontSize: 12, fontWeight: 700, color: "#495057", display: "block", marginBottom: 4 }}>Pieces Cut</label>
