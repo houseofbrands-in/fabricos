@@ -68,6 +68,7 @@ cut → in_progress → qc_pending → passed → ironing → packed
 - Tailor earnings dashboard with total pieces and total earnings
 - Admin can create/deactivate users and change any user's PIN
 - Packing summary report showing total packed pieces per design
+- **Rework & re-QC loop:** QC entry must add up to the pieces being checked (passed + alteration + scrap). A tailor is paid only for pieces that PASS. Rejected pieces go back to the same tailor as a rework job, get re-stitched, and are re-checked — pay is added only when the fixed piece finally passes. A "scrap" option marks a ruined piece that is never paid. Alteration feedback clears automatically once a bundle is fully resolved.
 
 ---
 
@@ -216,7 +217,7 @@ tailor_jobs
 
 qc_logs
   id, bundle_id (→bundles), tailor_job_id (→tailor_jobs),
-  qc_by (→users), passed_qty, alteration_qty,
+  qc_by (→users), passed_qty, alteration_qty, scrapped_qty,
   alteration_reasons (JSON string), checked_at
 ```
 
@@ -314,7 +315,7 @@ git push
 |---|---|---|
 | Session 1 | May 2026 | Full project setup: FastAPI backend, React frontend, PostgreSQL on Railway, Vercel deploy. Roles: designer, cutting, tailor, qc, admin. Core bundle flow: cut → stitch → qc → payroll. |
 | Session 2 | May 2026 | Phase 1 complete: Ironing stage, Packing stage with size breakup + packing summary. New roles: ironing, packing. WIP dashboard updated to 7 stages. Edit user PIN feature added. |
-| Session 3 | May 2026 | **Phase 2 complete: Fabric Module.** 5 new tables (fabrics, fabric_intake, fabric_qc, job_work, fabric_consumption) + fabric_id/metres_per_piece on designs. New `store` role + Fabric Store page (Fabrics / Intake / Fabric QC / Job Work tabs). Live stock computed from events. Auto fabric deduction at cutting (warns, never blocks). Job-work shrinkage tracking. Designer can set fabric/piece; cutting screen shows live stock + metres needed. Backend smoke-tested end-to-end. |
+| Session 3 | May 2026 | **Phase 2 complete: Fabric Module.** 5 new tables (fabrics, fabric_intake, fabric_qc, job_work, fabric_consumption) + fabric_id/metres_per_piece on designs. New `store` role + Fabric Store page (Fabrics / Intake / Fabric QC / Job Work tabs). Live stock computed from events. Auto fabric deduction at cutting (warns, never blocks). Job-work shrinkage tracking. Designer can set fabric/piece; cutting screen shows live stock + metres needed. Backend smoke-tested end-to-end. **Also:** fixed QC over-counting + added rework/re-QC loop so tailors are paid per piece that passes (rejected pieces re-stitched → re-checked → then paid); added scrap option; qc_logs.scrapped_qty added with a self-healing startup migration (no data loss). |
 
 ---
 

@@ -8,6 +8,7 @@ from models import Bundle, Design, FabricConsumption
 from auth import require_roles, get_current_user, User
 from qr_utils import qr_response, generate_qr_png
 from fabric_utils import fabric_live_stock
+from bundle_utils import bundle_progress, last_qc_reasons
 
 router = APIRouter(prefix="/bundles", tags=["bundles"])
 
@@ -136,6 +137,7 @@ def bundle_info(
         raise HTTPException(404, "Bundle not found")
     job = next((j for j in b.tailor_jobs if j.status == "submitted"), None)
     tailor_name = job.tailor.name if job else None
+    prog = bundle_progress(db, b)
     return {
         "id": b.id,
         "bundle_code": b.bundle_code,
@@ -148,4 +150,9 @@ def bundle_info(
         "qr_url": b.qr_url,
         "tailor_name": tailor_name,
         "job_id": job.id if job else None,
+        # rework-aware fields
+        "pieces_to_check": prog["outstanding"],
+        "is_recheck": prog["is_recheck"],
+        "passed_so_far": prog["passed"],
+        "prev_reasons": last_qc_reasons(db, b) if prog["is_recheck"] else [],
     }

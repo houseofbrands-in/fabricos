@@ -30,7 +30,10 @@ export default function Tailor() {
     setScanMsg(null);
     try {
       const { data } = await api.post("/tailor/scan", { bundle_code: scanCode.trim() });
-      setScanMsg({ type: "success", text: `Started! ${data.qty} pieces · ${data.design_name}` });
+      const text = data.is_rework
+        ? `Rework started! Fix ${data.pieces_to_make} piece(s)${data.rework_reasons?.length ? " — " + data.rework_reasons.join(", ") : ""}`
+        : `Started! ${data.pieces_to_make} pieces · ${data.design_name}`;
+      setScanMsg({ type: "success", text });
       setScanCode("");
       load();
     } catch (e) {
@@ -78,9 +81,9 @@ export default function Tailor() {
         {/* Active Bundle or Scan */}
         {d?.active_job ? (
           <div style={{ background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.08)", overflow: "hidden", marginBottom: 16 }}>
-            <div style={{ background: "#fff8e1", padding: "10px 16px", display: "flex", alignItems: "center", gap: 8 }}>
-              <Clock size={14} color="#f57f17" />
-              <span style={{ fontSize: 13, fontWeight: 700, color: "#f57f17" }}>In Progress</span>
+            <div style={{ background: d.active_job.is_rework ? "#ffe0e3" : "#fff8e1", padding: "10px 16px", display: "flex", alignItems: "center", gap: 8 }}>
+              <Clock size={14} color={d.active_job.is_rework ? "#b71c1c" : "#f57f17"} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: d.active_job.is_rework ? "#b71c1c" : "#f57f17" }}>{d.active_job.is_rework ? "Rework In Progress" : "In Progress"}</span>
               <span style={{ fontSize: 12, color: "#6c757d", marginLeft: "auto" }}>{d.active_job.bundle_code}</span>
             </div>
             {d.active_job.image_url && (
@@ -88,10 +91,15 @@ export default function Tailor() {
             )}
             <div style={{ padding: 16 }}>
               <h3 style={{ margin: "0 0 12px", fontWeight: 800 }}>{d.active_job.design_name}</h3>
+              {d.active_job.is_rework && d.active_job.rework_reasons?.length > 0 && (
+                <div style={{ background: "#fff5f7", borderLeft: "3px solid #e94560", borderRadius: "0 8px 8px 0", padding: "8px 12px", marginBottom: 12, fontSize: 13, color: "#b71c1c" }}>
+                  Fix these: {d.active_job.rework_reasons.join(", ")}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 20, marginBottom: 16 }}>
-                <div><div style={{ fontWeight: 800, fontSize: 20 }}>{d.active_job.qty}</div><div style={{ fontSize: 12, color: "#6c757d" }}>Pieces</div></div>
+                <div><div style={{ fontWeight: 800, fontSize: 20 }}>{d.active_job.pieces_to_make}</div><div style={{ fontSize: 12, color: "#6c757d" }}>{d.active_job.is_rework ? "To fix" : "Pieces"}</div></div>
                 <div><div style={{ fontWeight: 800, fontSize: 20, color: "#1b5e20" }}>₹{d.active_job.stitch_rate}</div><div style={{ fontSize: 12, color: "#6c757d" }}>Per piece</div></div>
-                <div><div style={{ fontWeight: 800, fontSize: 20, color: "#0f3460" }}>₹{d.active_job.qty * d.active_job.stitch_rate}</div><div style={{ fontSize: 12, color: "#6c757d" }}>Potential</div></div>
+                <div><div style={{ fontWeight: 800, fontSize: 20, color: "#0f3460" }}>₹{d.active_job.pieces_to_make * d.active_job.stitch_rate}</div><div style={{ fontSize: 12, color: "#6c757d" }}>{d.active_job.is_rework ? "To earn" : "Potential"}</div></div>
               </div>
               <button onClick={() => submit(d.active_job.job_id)} disabled={submitting} style={{
                 background: "#1b5e20", color: "white", border: "none", borderRadius: 12,
@@ -164,7 +172,7 @@ export default function Tailor() {
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                     <span style={{ background: "#ffe0e3", color: "#b71c1c", borderRadius: 20, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>
-                      {alt.alteration_qty} pcs
+                      {alt.alteration_qty} pcs to fix
                     </span>
                     {alt.reasons.map(r => (
                       <span key={r} style={{ background: "#f0f0f0", color: "#495057", borderRadius: 20, padding: "2px 8px", fontSize: 11 }}>{r}</span>

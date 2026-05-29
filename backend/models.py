@@ -79,6 +79,7 @@ class QCLog(Base):
     qc_by = Column(Integer, ForeignKey("users.id"))
     passed_qty = Column(Integer, default=0)
     alteration_qty = Column(Integer, default=0)
+    scrapped_qty = Column(Integer, default=0)  # pieces ruined / unfixable — never paid
     alteration_reasons = Column(Text)  # JSON array string
     checked_at = Column(DateTime, default=datetime.utcnow)
 

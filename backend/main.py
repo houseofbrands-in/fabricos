@@ -6,7 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from database import create_tables, SessionLocal
+from database import create_tables, SessionLocal, engine
+from sqlalchemy import inspect, text
 from models import User
 from auth import hash_pin
 
@@ -63,10 +64,36 @@ def health():
     return {"status": "ok"}
 
 
+# ── Light auto-migrations ──────────────────────────────────────────────────────
+# create_tables() makes NEW tables, but never adds NEW columns to tables that
+# already exist. This safely adds any such columns on startup, with no data loss.
+LIGHT_MIGRATIONS = [
+    # (table, column, column definition)
+    ("qc_logs", "scrapped_qty", "INTEGER DEFAULT 0"),
+]
+
+
+def run_light_migrations():
+    try:
+        insp = inspect(engine)
+        existing_tables = insp.get_table_names()
+        for table, column, ddl in LIGHT_MIGRATIONS:
+            if table not in existing_tables:
+                continue  # brand-new table — create_tables already built it in full
+            cols = [c["name"] for c in insp.get_columns(table)]
+            if column not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                print(f"✅ Added missing column {table}.{column}")
+    except Exception as e:
+        print("⚠️ Light migration skipped:", e)
+
+
 # ── Startup ────────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 def startup():
     create_tables()
+    run_light_migrations()
     db = SessionLocal()
     try:
         if not db.query(User).filter_by(role="admin").first():

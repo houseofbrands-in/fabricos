@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
-import { ClipboardCheck, ScanLine, Check } from "lucide-react";
+import { ClipboardCheck, ScanLine, Check, RefreshCw } from "lucide-react";
 
 const REASONS_DEFAULT = ["Loose thread","Wrong stitch length","Seam misalignment","Fabric pull","Button misplaced","Zip issue","Measurement off","Dirty mark","Other"];
 
@@ -10,7 +10,7 @@ export default function QC() {
   const [reasons, setReasons] = useState(REASONS_DEFAULT);
   const [scanCode, setScanCode] = useState("");
   const [bundle, setBundle] = useState(null);
-  const [form, setForm] = useState({ passed_qty: "", alteration_qty: "0", reasons: [] });
+  const [form, setForm] = useState({ passed_qty: "", alteration_qty: "0", scrapped_qty: "0", reasons: [] });
   const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);
   const scanRef = useRef(null);
@@ -32,7 +32,8 @@ export default function QC() {
         return;
       }
       setBundle(data);
-      setForm({ passed_qty: String(data.qty), alteration_qty: "0", reasons: [] });
+      // default: all the pieces being checked are passed, until the inspector says otherwise
+      setForm({ passed_qty: String(data.pieces_to_check), alteration_qty: "0", scrapped_qty: "0", reasons: [] });
     } catch (e) {
       setMsg({ type: "error", text: e.response?.data?.detail || "Bundle not found" });
     }
@@ -43,18 +44,30 @@ export default function QC() {
     reasons: f.reasons.includes(r) ? f.reasons.filter(x => x !== r) : [...f.reasons, r],
   }));
 
+  const toCheck = bundle ? bundle.pieces_to_check : 0;
+  const passedN = parseInt(form.passed_qty) || 0;
+  const alterN = parseInt(form.alteration_qty) || 0;
+  const scrapN = parseInt(form.scrapped_qty) || 0;
+  const enteredTotal = passedN + alterN + scrapN;
+  const totalsMatch = enteredTotal === toCheck;
+
   const submit = async (e) => {
     e.preventDefault();
+    if (!totalsMatch) return;
     setLoading(true);
     try {
-      await api.post("/qc/submit", {
+      const { data } = await api.post("/qc/submit", {
         bundle_id: bundle.id,
         job_id: bundle.job_id,
-        passed_qty: parseInt(form.passed_qty),
-        alteration_qty: parseInt(form.alteration_qty),
+        passed_qty: passedN,
+        alteration_qty: alterN,
+        scrapped_qty: scrapN,
         reasons: form.reasons,
       });
-      setMsg({ type: "success", text: `✅ QC saved! Bundle marked as ${parseInt(form.alteration_qty) > 0 ? "alteration" : "passed"}.` });
+      const txt = data.bundle_status === "passed"
+        ? `✅ Done! All pieces resolved — bundle passed (${data.passed_total} good${data.scrapped_total ? `, ${data.scrapped_total} scrapped` : ""}).`
+        : `✅ Saved! ${data.outstanding} piece(s) sent back for rework.`;
+      setMsg({ type: "success", text: txt });
       setBundle(null);
       setScanCode("");
       loadPending();
@@ -66,14 +79,14 @@ export default function QC() {
   };
 
   const API = process.env.REACT_APP_API_URL;
-  const showReasons = parseInt(form.alteration_qty) > 0;
+  const showReasons = alterN > 0;
 
   return (
     <Layout>
       <h2 style={{ fontWeight: 900, marginBottom: 4 }}>QC Inspection</h2>
       <p style={{ color: "#6c757d", marginBottom: 20, fontSize: 14 }}>{pending.length} bundles pending review</p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,420px) 1fr", gap: 20, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,440px) 1fr", gap: 20, alignItems: "start" }}>
 
         {/* Scan + Form */}
         <div style={{ background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" }}>
@@ -95,7 +108,7 @@ export default function QC() {
 
             {bundle && (
               <form onSubmit={submit}>
-                <div style={{ background: "#f0f7ff", border: "1px solid #cce0ff", borderRadius: 10, padding: 14, marginBottom: 16 }}>
+                <div style={{ background: bundle.is_recheck ? "#fff8e1" : "#f0f7ff", border: `1px solid ${bundle.is_recheck ? "#ffe69c" : "#cce0ff"}`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
                     <div>
                       <div style={{ fontWeight: 800, fontFamily: "monospace" }}>{bundle.bundle_code}</div>
@@ -103,25 +116,45 @@ export default function QC() {
                       <div style={{ fontSize: 13, marginTop: 4 }}>Tailor: <strong>{bundle.tailor_name || "—"}</strong></div>
                     </div>
                     <div style={{ textAlign: "right" }}>
-                      <div style={{ fontWeight: 900, fontSize: 22, color: "#0f3460" }}>{bundle.qty}</div>
-                      <div style={{ fontSize: 12, color: "#6c757d" }}>pieces</div>
+                      <div style={{ fontWeight: 900, fontSize: 22, color: "#0f3460" }}>{bundle.pieces_to_check}</div>
+                      <div style={{ fontSize: 12, color: "#6c757d" }}>to check</div>
                     </div>
                   </div>
+                  {bundle.is_recheck && (
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #ffe69c" }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#7a5b00", display: "flex", alignItems: "center", gap: 5 }}>
+                        <RefreshCw size={13} /> RE-CHECK — {bundle.passed_so_far} already passed earlier, these are the reworked pieces
+                      </div>
+                      {bundle.prev_reasons?.length > 0 && (
+                        <div style={{ fontSize: 12, color: "#7a5b00", marginTop: 4 }}>Sent back for: {bundle.prev_reasons.join(", ")}</div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
                   <div>
-                    <label style={{ fontSize: 12, fontWeight: 700, color: "#1b5e20", display: "block", marginBottom: 4 }}>✓ Passed Qty</label>
-                    <input type="number" value={form.passed_qty} min="0" max={bundle.qty}
+                    <label style={{ fontSize: 11, fontWeight: 700, color: "#1b5e20", display: "block", marginBottom: 4 }}>✓ Passed</label>
+                    <input type="number" value={form.passed_qty} min="0" max={toCheck}
                       onChange={e => setForm(f => ({ ...f, passed_qty: e.target.value }))} required
                       style={{ width: "100%", border: "2px solid #1b5e20", borderRadius: 10, padding: "10px", fontSize: 18, fontWeight: 800, outline: "none", boxSizing: "border-box" }} />
                   </div>
                   <div>
-                    <label style={{ fontSize: 12, fontWeight: 700, color: "#b71c1c", display: "block", marginBottom: 4 }}>✗ Alteration Qty</label>
-                    <input type="number" value={form.alteration_qty} min="0" max={bundle.qty}
-                      onChange={e => setForm(f => ({ ...f, alteration_qty: e.target.value, reasons: [] }))}
+                    <label style={{ fontSize: 11, fontWeight: 700, color: "#b71c1c", display: "block", marginBottom: 4 }}>✗ Alteration</label>
+                    <input type="number" value={form.alteration_qty} min="0" max={toCheck}
+                      onChange={e => setForm(f => ({ ...f, alteration_qty: e.target.value, reasons: parseInt(e.target.value) > 0 ? f.reasons : [] }))}
                       style={{ width: "100%", border: "2px solid #b71c1c", borderRadius: 10, padding: "10px", fontSize: 18, fontWeight: 800, outline: "none", boxSizing: "border-box" }} />
                   </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: "#6c757d", display: "block", marginBottom: 4 }}>⊘ Scrap</label>
+                    <input type="number" value={form.scrapped_qty} min="0" max={toCheck}
+                      onChange={e => setForm(f => ({ ...f, scrapped_qty: e.target.value }))}
+                      style={{ width: "100%", border: "2px solid #adb5bd", borderRadius: 10, padding: "10px", fontSize: 18, fontWeight: 800, outline: "none", boxSizing: "border-box" }} />
+                  </div>
+                </div>
+
+                <div style={{ fontSize: 12, fontWeight: 700, textAlign: "center", marginBottom: 16, color: totalsMatch ? "#1b5e20" : "#b71c1c" }}>
+                  {enteredTotal} of {toCheck} pieces accounted for{totalsMatch ? " ✓" : " — must equal " + toCheck}
                 </div>
 
                 {showReasons && (
@@ -140,9 +173,9 @@ export default function QC() {
                   </div>
                 )}
 
-                <button type="submit" disabled={loading} style={{
-                  background: "#1a1a2e", color: "white", border: "none", borderRadius: 10,
-                  padding: "12px", fontWeight: 700, fontSize: 14, width: "100%", cursor: "pointer",
+                <button type="submit" disabled={loading || !totalsMatch} style={{
+                  background: totalsMatch ? "#1a1a2e" : "#adb5bd", color: "white", border: "none", borderRadius: 10,
+                  padding: "12px", fontWeight: 700, fontSize: 14, width: "100%", cursor: totalsMatch ? "pointer" : "default",
                 }}>
                   <ClipboardCheck size={15} style={{ marginRight: 6 }} />
                   {loading ? "Saving..." : "Save QC Log"}
@@ -172,9 +205,11 @@ export default function QC() {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <div>
                     <div style={{ fontWeight: 700, fontFamily: "monospace", fontSize: 14 }}>{b.bundle_code}</div>
-                    <div style={{ color: "#6c757d", fontSize: 12, marginTop: 2 }}>{b.design_name} · {b.qty} pcs</div>
+                    <div style={{ color: "#6c757d", fontSize: 12, marginTop: 2 }}>{b.design_name} · {b.pieces_to_check} pcs to check</div>
                   </div>
-                  <span style={{ background: "#f3e5f5", color: "#7b1fa2", borderRadius: 20, padding: "3px 10px", fontSize: 12, fontWeight: 700 }}>QC Pending</span>
+                  {b.is_recheck
+                    ? <span style={{ background: "#fff3cd", color: "#7a5b00", borderRadius: 20, padding: "3px 10px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}><RefreshCw size={11} /> Re-check</span>
+                    : <span style={{ background: "#f3e5f5", color: "#7b1fa2", borderRadius: 20, padding: "3px 10px", fontSize: 12, fontWeight: 700 }}>QC Pending</span>}
                 </div>
               </div>
             ))

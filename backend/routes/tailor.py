@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import Bundle, TailorJob, QCLog, Design, User
 from auth import require_roles, get_current_user
+from bundle_utils import bundle_progress, last_qc_reasons
 
 router = APIRouter(prefix="/tailor", tags=["tailor"])
 
@@ -25,14 +26,21 @@ def scan_bundle(
     ).first()
     if not bundle:
         raise HTTPException(404, "Bundle not found")
-    if bundle.status != "cut":
-        raise HTTPException(400, f"Bundle is already '{bundle.status}'. Cannot start.")
+
+    # A bundle can be started when freshly cut, OR picked up again for rework
+    # when QC has sent some pieces back (status "alteration").
+    if bundle.status not in ("cut", "alteration"):
+        raise HTTPException(400, f"Bundle is '{bundle.status}'. Cannot start.")
 
     existing = db.query(TailorJob).filter_by(
         tailor_id=current_user.id, status="in_progress"
     ).first()
     if existing:
         raise HTTPException(400, "You already have an active bundle. Submit it first.")
+
+    is_rework = bundle.status == "alteration"
+    prog = bundle_progress(db, bundle)
+    pieces_to_make = prog["outstanding"] if is_rework else bundle.qty
 
     job = TailorJob(bundle_id=bundle.id, tailor_id=current_user.id)
     bundle.status = "in_progress"
@@ -43,6 +51,9 @@ def scan_bundle(
         "job_id": job.id,
         "bundle_code": bundle.bundle_code,
         "qty": bundle.qty,
+        "pieces_to_make": pieces_to_make,
+        "is_rework": is_rework,
+        "rework_reasons": last_qc_reasons(db, bundle) if is_rework else [],
         "design_name": bundle.design.design_name,
         "image_url": bundle.design.image_url,
         "stitch_rate": bundle.design.stitch_rate,
@@ -77,7 +88,7 @@ def tailor_dashboard(
         tailor_id=current_user.id, status="in_progress"
     ).first()
 
-    # All-time earnings
+    # All-time earnings = sum of pieces that PASSED (rework re-passes add here too)
     rows = (
         db.query(QCLog, Design)
         .join(TailorJob, QCLog.tailor_job_id == TailorJob.id)
@@ -89,35 +100,49 @@ def tailor_dashboard(
     total_earnings = sum(r.passed_qty * d.stitch_rate for r, d in rows)
     total_pieces = sum(r.passed_qty for r, d in rows)
 
-    # Recent alterations
-    alt_rows = (
-        db.query(QCLog, Bundle)
-        .join(TailorJob, QCLog.tailor_job_id == TailorJob.id)
-        .join(Bundle, QCLog.bundle_id == Bundle.id)
-        .filter(TailorJob.tailor_id == current_user.id, QCLog.alteration_qty > 0)
-        .order_by(QCLog.checked_at.desc())
-        .limit(10)
-        .all()
-    )
-    alterations = [
-        {
-            "bundle_code": b.bundle_code,
-            "alteration_qty": q.alteration_qty,
-            "reasons": json.loads(q.alteration_reasons) if q.alteration_reasons else [],
-            "checked_at": q.checked_at.isoformat(),
-        }
-        for q, b in alt_rows
-    ]
+    # Alteration feed = bundles this tailor touched that are STILL awaiting rework.
+    # Once a bundle is fully resolved (passed), it drops off this list automatically.
+    job_bundle_ids = {
+        j.bundle_id for j in db.query(TailorJob).filter_by(tailor_id=current_user.id).all()
+    }
+    alterations = []
+    if job_bundle_ids:
+        alt_bundles = (
+            db.query(Bundle)
+            .filter(Bundle.id.in_(job_bundle_ids), Bundle.status == "alteration")
+            .all()
+        )
+        for b in alt_bundles:
+            prog = bundle_progress(db, b)
+            last = (
+                db.query(QCLog)
+                .filter(QCLog.bundle_id == b.id)
+                .order_by(QCLog.checked_at.desc())
+                .first()
+            )
+            alterations.append({
+                "bundle_code": b.bundle_code,
+                "alteration_qty": prog["outstanding"],   # pieces still to fix
+                "reasons": last_qc_reasons(db, b),
+                "checked_at": last.checked_at.isoformat() if last else None,
+            })
+        alterations.sort(key=lambda a: a["checked_at"] or "", reverse=True)
 
     active = None
     if active_job:
+        b = active_job.bundle
+        prog = bundle_progress(db, b)
+        is_rework = prog["is_recheck"]
         active = {
             "job_id": active_job.id,
-            "bundle_code": active_job.bundle.bundle_code,
-            "qty": active_job.bundle.qty,
-            "design_name": active_job.bundle.design.design_name,
-            "image_url": active_job.bundle.design.image_url,
-            "stitch_rate": active_job.bundle.design.stitch_rate,
+            "bundle_code": b.bundle_code,
+            "qty": b.qty,
+            "pieces_to_make": prog["outstanding"] if is_rework else b.qty,
+            "is_rework": is_rework,
+            "rework_reasons": last_qc_reasons(db, b) if is_rework else [],
+            "design_name": b.design.design_name,
+            "image_url": b.design.image_url,
+            "stitch_rate": b.design.stitch_rate,
             "started_at": active_job.started_at.isoformat(),
         }
 
