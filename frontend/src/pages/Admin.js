@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
-import { Users, TrendingUp, IndianRupee, Package, Plus, Trash2 } from "lucide-react";
+import { Users, TrendingUp, IndianRupee, Package, Plus, Trash2, KeyRound, X } from "lucide-react";
 
 const ROLE_OPTIONS = ["designer", "cutting", "tailor", "qc", "ironing", "packing", "admin"];
 
@@ -13,6 +13,8 @@ export default function Admin() {
   const [tab, setTab] = useState("wip");
   const [newUser, setNewUser] = useState({ name: "", role: "tailor", pin: "" });
   const [uMsg, setUMsg] = useState("");
+  const [editPin, setEditPin] = useState(null); // { id, name, pin }
+  const [pinMsg, setPinMsg] = useState("");
 
   const loadAll = () => {
     api.get("/admin/wip").then(r => setWip(r.data));
@@ -39,6 +41,18 @@ export default function Admin() {
     if (!window.confirm(`Deactivate ${name}?`)) return;
     await api.delete(`/admin/users/${uid}`);
     api.get("/admin/users").then(r => setUsers(r.data));
+  };
+
+  const updatePin = async (e) => {
+    e.preventDefault();
+    setPinMsg("");
+    try {
+      await api.patch(`/admin/users/${editPin.id}/pin`, { new_pin: editPin.pin });
+      setPinMsg("✅ PIN updated!");
+      setTimeout(() => { setEditPin(null); setPinMsg(""); }, 1200);
+    } catch (e) {
+      setPinMsg(e.response?.data?.detail || "Error updating PIN");
+    }
   };
 
   const WIP_STAGES = [
@@ -245,16 +259,71 @@ export default function Admin() {
                       </span>
                     </td>
                     <td style={{ padding: "12px 16px" }}>
-                      {u.role !== "admin" && u.is_active ? (
-                        <button onClick={() => deleteUser(u.id, u.name)} style={{ background: "none", border: "1px solid #dee2e6", borderRadius: 8, padding: "4px 8px", cursor: "pointer", color: "#b71c1c" }}>
-                          <Trash2 size={13} />
-                        </button>
-                      ) : null}
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {u.is_active && (
+                          <button onClick={() => { setEditPin({ id: u.id, name: u.name, pin: "" }); setPinMsg(""); }}
+                            title="Change PIN"
+                            style={{ background: "none", border: "1px solid #dee2e6", borderRadius: 8, padding: "4px 8px", cursor: "pointer", color: "#0f3460" }}>
+                            <KeyRound size={13} />
+                          </button>
+                        )}
+                        {u.role !== "admin" && u.is_active ? (
+                          <button onClick={() => deleteUser(u.id, u.name)} style={{ background: "none", border: "1px solid #dee2e6", borderRadius: 8, padding: "4px 8px", cursor: "pointer", color: "#b71c1c" }}>
+                            <Trash2 size={13} />
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+    {/* PIN Edit Modal */}
+      {editPin && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+        }} onClick={e => e.target === e.currentTarget && setEditPin(null)}>
+          <div style={{ background: "white", borderRadius: 20, padding: 28, width: 320, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontWeight: 800, fontSize: 16 }}>Change PIN — {editPin.name}</h3>
+              <button onClick={() => setEditPin(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#6c757d" }}>
+                <X size={18} />
+              </button>
+            </div>
+            {pinMsg && (
+              <div style={{ background: pinMsg.startsWith("✅") ? "#d1f5ea" : "#ffe0e3", borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: 13, color: pinMsg.startsWith("✅") ? "#1b5e20" : "#b71c1c" }}>
+                {pinMsg}
+              </div>
+            )}
+            <form onSubmit={updatePin}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#495057", display: "block", marginBottom: 6 }}>New 4-digit PIN</label>
+              <input
+                type="password"
+                value={editPin.pin}
+                onChange={e => setEditPin(p => ({ ...p, pin: e.target.value }))}
+                maxLength={4}
+                minLength={4}
+                pattern="\d{4}"
+                placeholder="Enter new PIN"
+                autoFocus
+                required
+                style={{
+                  width: "100%", border: "2px solid #dee2e6", borderRadius: 12,
+                  padding: "14px", fontSize: 24, fontWeight: 800, textAlign: "center",
+                  letterSpacing: 8, outline: "none", boxSizing: "border-box", marginBottom: 16,
+                }}
+              />
+              <button type="submit" style={{
+                background: "#e94560", color: "white", border: "none", borderRadius: 12,
+                padding: "12px", fontWeight: 700, width: "100%", cursor: "pointer", fontSize: 14,
+              }}>
+                <KeyRound size={14} style={{ marginRight: 6 }} />Update PIN
+              </button>
+            </form>
           </div>
         </div>
       )}
