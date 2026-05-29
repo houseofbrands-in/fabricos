@@ -3,7 +3,7 @@ import Layout from "../components/Layout";
 import api from "../api";
 import { Users, TrendingUp, IndianRupee, Package, Plus, Trash2 } from "lucide-react";
 
-const ROLE_OPTIONS = ["designer", "cutting", "tailor", "qc", "admin"];
+const ROLE_OPTIONS = ["designer", "cutting", "tailor", "qc", "ironing", "packing", "admin"];
 
 export default function Admin() {
   const [wip, setWip] = useState({});
@@ -46,7 +46,9 @@ export default function Admin() {
     ["in_progress", "#f57f17", "Stitching"],
     ["qc_pending", "#7b1fa2", "QC Pending"],
     ["alteration", "#b71c1c", "Alteration"],
-    ["passed", "#1b5e20", "Passed"],
+    ["passed", "#1b5e20", "QC Passed"],
+    ["ironing", "#e65100", "Ironing"],
+    ["packed", "#00695c", "Packed"],
   ];
 
   const tabs = ["wip", "performance", "payroll", "users"];

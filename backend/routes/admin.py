@@ -15,7 +15,7 @@ def wip_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("admin")),
 ):
-    statuses = ["cut", "in_progress", "qc_pending", "alteration", "passed"]
+    statuses = ["cut", "in_progress", "qc_pending", "alteration", "passed", "ironing", "packed"]
     return {s: db.query(Bundle).filter_by(status=s).count() for s in statuses}
 
 
@@ -117,7 +117,7 @@ def create_user(
 ):
     if len(body.pin) != 4 or not body.pin.isdigit():
         raise HTTPException(400, "PIN must be exactly 4 digits")
-    valid_roles = {"admin", "designer", "cutting", "tailor", "qc"}
+    valid_roles = {"admin", "designer", "cutting", "tailor", "qc", "ironing", "packing"}
     if body.role not in valid_roles:
         raise HTTPException(400, "Invalid role")
     u = User(name=body.name.strip(), role=body.role, pin_hash=hash_pin(body.pin))

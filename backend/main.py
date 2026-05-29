@@ -16,6 +16,8 @@ from routes.bundles import router as bundles_router
 from routes.tailor import router as tailor_router
 from routes.qc import router as qc_router
 from routes.admin import router as admin_router
+from routes.ironing import router as ironing_router
+from routes.packing import router as packing_router
 
 app = FastAPI(title="FabricOS API", version="1.0.0")
 
@@ -36,6 +38,8 @@ app.include_router(bundles_router)
 app.include_router(tailor_router)
 app.include_router(qc_router)
 app.include_router(admin_router)
+app.include_router(ironing_router)
+app.include_router(packing_router)
 
 
 # File serving (uploads + QR codes from /tmp)

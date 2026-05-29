@@ -8,6 +8,8 @@ const ROLE_COLORS = {
   cutting: "#0891b2",
   tailor: "#059669",
   qc: "#d97706",
+  ironing: "#e65100",
+  packing: "#00695c",
 };
 
 export default function Layout({ children }) {

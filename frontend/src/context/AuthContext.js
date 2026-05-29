@@ -43,6 +43,8 @@ export function roleHome(role) {
     cutting: "/cutting",
     tailor: "/tailor",
     qc: "/qc",
+    ironing: "/ironing",
+    packing: "/packing",
   };
   return map[role] || "/login";
 }
