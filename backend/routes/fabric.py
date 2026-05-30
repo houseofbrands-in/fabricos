@@ -3,11 +3,12 @@ from datetime import datetime
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from database import get_db
 from models import (
     Fabric, FabricIntake, FabricQC, JobWork, FabricConsumption,
-    PurchaseBill, DefectiveFabric, FabricStageHistory, Design, User,
+    PurchaseBill, DefectiveFabric, FabricStageHistory, Design, User, Supplier,
 )
 from auth import require_roles, get_current_user
 from fabric_utils import fabric_live_stock, fabric_stock_breakdown, log_fabric_event
@@ -54,12 +55,26 @@ class FabricIn(BaseModel):
     fabric_name: str
     fabric_type: str
     composition: Optional[str] = ""
+    supplier_id: Optional[int] = None
     supplier_name: Optional[str] = ""
     low_stock_threshold: float = 0
 
 
 class FabricBulkIn(BaseModel):
     fabrics: List[FabricIn]
+
+
+def _supplier_name(db, supplier_id, fallback=""):
+    """Resolve a supplier's current name from the master (snapshot at use time)."""
+    if supplier_id:
+        s = db.query(Supplier).get(supplier_id)
+        if s:
+            return s.name
+    return (fallback or "").strip()
+
+
+def _dup_fabric(db, name):
+    return db.query(Fabric).filter(func.lower(Fabric.fabric_name) == name.lower()).first()
 
 
 @router.get("/")
@@ -77,6 +92,7 @@ def list_fabrics(
             "fabric_name": fb.fabric_name,
             "fabric_type": fb.fabric_type,
             "composition": fb.composition,
+            "supplier_id": fb.supplier_id,
             "supplier_name": fb.supplier_name,
             "low_stock_threshold": threshold,
             "available": bd["available"],
@@ -94,11 +110,15 @@ def create_fabric(
 ):
     if body.fabric_type not in ("grey", "dyed"):
         raise HTTPException(400, "fabric_type must be 'grey' or 'dyed'")
+    name = body.fabric_name.strip()
+    if _dup_fabric(db, name):
+        raise HTTPException(400, f"'{name}' already exists in the fabric list")
     fb = Fabric(
-        fabric_name=body.fabric_name.strip(),
+        fabric_name=name,
         fabric_type=body.fabric_type,
         composition=(body.composition or "").strip(),
-        supplier_name=(body.supplier_name or "").strip(),
+        supplier_id=body.supplier_id,
+        supplier_name=_supplier_name(db, body.supplier_id, body.supplier_name),
         low_stock_threshold=body.low_stock_threshold or 0,
     )
     db.add(fb)
@@ -120,11 +140,15 @@ def create_fabrics_bulk(
             continue
         if f.fabric_type not in ("grey", "dyed"):
             raise HTTPException(400, f"'{f.fabric_name}': type must be grey or dyed")
+        name = f.fabric_name.strip()
+        if _dup_fabric(db, name) or any(c.fabric_name.lower() == name.lower() for c in created):
+            raise HTTPException(400, f"'{name}' already exists (or is duplicated in this list)")
         fb = Fabric(
-            fabric_name=f.fabric_name.strip(),
+            fabric_name=name,
             fabric_type=f.fabric_type,
             composition=(f.composition or "").strip(),
-            supplier_name=(f.supplier_name or "").strip(),
+            supplier_id=f.supplier_id,
+            supplier_name=_supplier_name(db, f.supplier_id, f.supplier_name),
             low_stock_threshold=f.low_stock_threshold or 0,
         )
         db.add(fb)
@@ -164,7 +188,8 @@ class PurchaseLine(BaseModel):
 
 
 class PurchaseIn(BaseModel):
-    supplier_name: str
+    supplier_id: Optional[int] = None
+    supplier_name: Optional[str] = ""
     invoice_number: Optional[str] = ""
     notes: Optional[str] = ""
     lines: List[PurchaseLine]
@@ -178,6 +203,9 @@ def create_purchase(
 ):
     if not body.lines:
         raise HTTPException(400, "Add at least one fabric line")
+    supplier_name = _supplier_name(db, body.supplier_id, body.supplier_name)
+    if not supplier_name:
+        raise HTTPException(400, "Choose a supplier")
     for ln in body.lines:
         if not db.query(Fabric).get(ln.fabric_id):
             raise HTTPException(404, f"Fabric {ln.fabric_id} not found")
@@ -185,7 +213,8 @@ def create_purchase(
             raise HTTPException(400, "Each line needs metres greater than 0")
 
     bill = PurchaseBill(
-        supplier_name=body.supplier_name.strip(),
+        supplier_id=body.supplier_id,
+        supplier_name=supplier_name,
         invoice_number=(body.invoice_number or "").strip(),
         notes=(body.notes or "").strip(),
         created_by=current_user.id,
@@ -553,8 +582,9 @@ def fabric_history(
 class JobWorkIn(BaseModel):
     fabric_id: int
     design_id: Optional[int] = None
+    vendor_id: Optional[int] = None
     job_type: str
-    vendor_name: str
+    vendor_name: Optional[str] = ""
     metres_sent: float
     notes: Optional[str] = ""
 
@@ -576,19 +606,23 @@ def send_job_work(
         raise HTTPException(400, "job_type must be 'printing' or 'embroidery'")
     if body.metres_sent <= 0:
         raise HTTPException(400, "Metres sent must be greater than 0")
+    vendor_name = _supplier_name(db, body.vendor_id, body.vendor_name)
+    if not vendor_name:
+        raise HTTPException(400, "Choose a vendor")
 
     jw = JobWork(
         fabric_id=body.fabric_id,
         design_id=body.design_id,
+        vendor_id=body.vendor_id,
         job_type=body.job_type,
-        vendor_name=body.vendor_name.strip(),
+        vendor_name=vendor_name,
         metres_sent=body.metres_sent,
         notes=(body.notes or "").strip(),
         status="sent",
     )
     db.add(jw)
     log_fabric_event(db, body.fabric_id, f"sent_{body.job_type}",
-                     detail=f"{body.metres_sent} m to {body.vendor_name.strip()}",
+                     detail=f"{body.metres_sent} m to {vendor_name}",
                      metres=body.metres_sent, user_id=current_user.id)
     db.commit()
     db.refresh(jw)

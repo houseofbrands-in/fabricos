@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
 import { useAuth } from "../context/AuthContext";
-import { Layers, Plus, Truck, ClipboardCheck, PackageCheck, AlertTriangle, ArrowLeft, Trash2, X, History, RefreshCw } from "lucide-react";
+import { Layers, Plus, Truck, ClipboardCheck, PackageCheck, AlertTriangle, ArrowLeft, Trash2, X, History, RefreshCw, Users, Pencil } from "lucide-react";
 
 const S = {
   card: { background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" },
@@ -50,6 +50,53 @@ async function doDelete(url, reload) {
   reload();
 }
 
+const KIND_LABEL = { fabric: "Fabric supplier", jobwork: "Job-work vendor", both: "Both" };
+
+// Dropdown of suppliers (filtered by kind) with an inline "+ New" quick-add.
+function SupplierSelect({ suppliers, value, onChange, kind, reloadSuppliers, placeholder }) {
+  const [adding, setAdding] = useState(false);
+  const [f, setF] = useState({ name: "", phone: "", gst: "", city: "", contact_person: "", notes: "" });
+  const [busy, setBusy] = useState(false);
+  const list = suppliers.filter(s => s.kind === kind || s.kind === "both");
+
+  const save = async () => {
+    if (!f.name.trim()) { alert("Enter a name"); return; }
+    setBusy(true);
+    try {
+      const { data } = await api.post("/suppliers/", { ...f, kind });
+      await reloadSuppliers();
+      onChange(String(data.id));
+      setAdding(false);
+      setF({ name: "", phone: "", gst: "", city: "", contact_person: "", notes: "" });
+    } catch (e) { alert(e.response?.data?.detail || "Could not add"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <select style={{ ...S.input, flex: 1 }} value={value} onChange={e => onChange(e.target.value)}>
+          <option value="">{placeholder || "Select…"}</option>
+          {list.map(s => <option key={s.id} value={s.id}>{s.name}{s.city ? ` · ${s.city}` : ""}</option>)}
+        </select>
+        <button type="button" onClick={() => setAdding(a => !a)} style={{ background: "#eef2ff", color: "#3730a3", border: "none", borderRadius: 10, padding: "0 14px", fontWeight: 700, cursor: "pointer", fontSize: 13, whiteSpace: "nowrap" }}>+ New</button>
+      </div>
+      {adding && (
+        <div style={{ border: "1px solid #e9ecef", borderRadius: 10, padding: 12, marginTop: 8, background: "#fafbff" }}>
+          <input style={{ ...S.input, marginBottom: 8 }} placeholder="Name *" value={f.name} onChange={e => setF(v => ({ ...v, name: e.target.value }))} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <input style={S.input} placeholder="Phone" value={f.phone} onChange={e => setF(v => ({ ...v, phone: e.target.value }))} />
+            <input style={S.input} placeholder="GST" value={f.gst} onChange={e => setF(v => ({ ...v, gst: e.target.value }))} />
+            <input style={S.input} placeholder="City" value={f.city} onChange={e => setF(v => ({ ...v, city: e.target.value }))} />
+            <input style={S.input} placeholder="Contact person" value={f.contact_person} onChange={e => setF(v => ({ ...v, contact_person: e.target.value }))} />
+          </div>
+          <button type="button" onClick={save} disabled={busy} style={{ ...S.btn, padding: "8px 14px", fontSize: 13 }}>{busy ? "Saving..." : "Save supplier"}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Store() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -59,19 +106,22 @@ export default function Store() {
   const [qcPending, setQcPending] = useState([]);
   const [jobWork, setJobWork] = useState([]);
   const [defective, setDefective] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
 
   const loadFabrics = () => api.get("/fabric/").then(r => setFabrics(r.data));
   const loadPurchases = () => api.get("/fabric/purchase/list").then(r => setPurchases(r.data));
   const loadQcPending = () => api.get("/fabric/qc/pending").then(r => setQcPending(r.data));
   const loadJobWork = () => api.get("/fabric/job-work/list").then(r => setJobWork(r.data));
   const loadDefective = () => api.get("/fabric/defective").then(r => setDefective(r.data));
-  const loadAll = () => { loadFabrics(); loadPurchases(); loadQcPending(); loadJobWork(); loadDefective(); };
+  const loadSuppliers = () => api.get("/suppliers/").then(r => setSuppliers(r.data));
+  const loadAll = () => { loadFabrics(); loadPurchases(); loadQcPending(); loadJobWork(); loadDefective(); loadSuppliers(); };
   useEffect(loadAll, []);
 
   const lowCount = fabrics.filter(f => f.low_stock).length;
   const openDefects = defective.filter(d => d.status === "open").length;
   const tabs = [
     ["fabrics", "Fabrics", Layers],
+    ["suppliers", "Suppliers", Users],
     ["purchase", "Purchase", Truck],
     ["qc", "Fabric QC", ClipboardCheck],
     ["defective", "Defective", AlertTriangle],
@@ -107,18 +157,166 @@ export default function Store() {
         ))}
       </div>
 
-      {tab === "fabrics" && <FabricsTab fabrics={fabrics} reload={loadAll} isAdmin={isAdmin} />}
-      {tab === "purchase" && <PurchaseTab fabrics={fabrics} purchases={purchases} isAdmin={isAdmin} reload={loadAll} />}
+      {tab === "fabrics" && <FabricsTab fabrics={fabrics} reload={loadAll} isAdmin={isAdmin} suppliers={suppliers} reloadSuppliers={loadSuppliers} />}
+      {tab === "suppliers" && <SuppliersTab suppliers={suppliers} reload={loadSuppliers} isAdmin={isAdmin} />}
+      {tab === "purchase" && <PurchaseTab fabrics={fabrics} purchases={purchases} isAdmin={isAdmin} reload={loadAll} suppliers={suppliers} reloadSuppliers={loadSuppliers} />}
       {tab === "qc" && <QCTab pending={qcPending} reload={loadAll} />}
       {tab === "defective" && <DefectiveTab defective={defective} isAdmin={isAdmin} reload={loadAll} />}
-      {tab === "jobwork" && <JobWorkTab fabrics={fabrics} jobWork={jobWork} isAdmin={isAdmin} reload={loadAll} />}
+      {tab === "jobwork" && <JobWorkTab fabrics={fabrics} jobWork={jobWork} isAdmin={isAdmin} reload={loadAll} suppliers={suppliers} reloadSuppliers={loadSuppliers} />}
     </Layout>
   );
 }
 
+/* ─────────────────────────── SUPPLIERS TAB ─────────────────────────── */
+function SuppliersTab({ suppliers, reload, isAdmin }) {
+  const blank = { name: "", phone: "", gst: "", city: "", contact_person: "", notes: "", kind: "fabric" };
+  const [form, setForm] = useState(blank);
+  const [editId, setEditId] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault(); setLoading(true); setMsg("");
+    try {
+      if (editId) await api.patch(`/suppliers/${editId}`, form);
+      else await api.post("/suppliers/", form);
+      setMsg(editId ? "✅ Supplier updated!" : "✅ Supplier added!");
+      setForm(blank); setEditId(null);
+      reload();
+    } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
+    finally { setLoading(false); }
+  };
+
+  const startEdit = (s) => {
+    setEditId(s.id);
+    setForm({ name: s.name, phone: s.phone || "", gst: s.gst || "", city: s.city || "", contact_person: s.contact_person || "", notes: s.notes || "", kind: s.kind || "fabric" });
+    setMsg("");
+  };
+
+  const openHistory = async (s) => {
+    try { const { data } = await api.get(`/suppliers/${s.id}`); setHistory(data); }
+    catch { setHistory(null); }
+  };
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,400px) 1fr", gap: 20, alignItems: "start" }}>
+      <div style={S.card}>
+        <div style={S.header}><h3 style={S.h3}><Plus size={15} /> {editId ? "Edit Supplier" : "New Supplier / Vendor"}</h3></div>
+        <form onSubmit={submit} style={{ padding: 20 }}>
+          <Msg msg={msg} />
+          <div style={{ marginBottom: 14 }}>
+            <label style={S.label}>Name</label>
+            <input style={S.input} placeholder="e.g. Surat Mills" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <label style={S.label}>Type</label>
+            <select style={S.input} value={form.kind} onChange={e => setForm(f => ({ ...f, kind: e.target.value }))}>
+              <option value="fabric">Fabric supplier</option>
+              <option value="jobwork">Job-work vendor (printing / embroidery)</option>
+              <option value="both">Both</option>
+            </select>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+            <div><label style={S.label}>Phone</label><input style={S.input} value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} /></div>
+            <div><label style={S.label}>GST</label><input style={S.input} value={form.gst} onChange={e => setForm(f => ({ ...f, gst: e.target.value }))} /></div>
+            <div><label style={S.label}>City</label><input style={S.input} value={form.city} onChange={e => setForm(f => ({ ...f, city: e.target.value }))} /></div>
+            <div><label style={S.label}>Contact Person</label><input style={S.input} value={form.contact_person} onChange={e => setForm(f => ({ ...f, contact_person: e.target.value }))} /></div>
+          </div>
+          <div style={{ marginBottom: 18 }}>
+            <label style={S.label}>Notes</label>
+            <input style={S.input} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="submit" style={{ ...S.btn, flex: 1, opacity: loading ? 0.7 : 1 }} disabled={loading}>{loading ? "Saving..." : editId ? "Update" : "Add Supplier"}</button>
+            {editId && <button type="button" onClick={() => { setEditId(null); setForm(blank); setMsg(""); }} style={{ ...S.btn, flex: 1, background: "#e9ecef", color: "#495057" }}>Cancel</button>}
+          </div>
+        </form>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.header}><h3 style={S.h3}><Users size={15} /> Suppliers & Vendors ({suppliers.length})</h3></div>
+        {suppliers.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>None yet — add your suppliers and job-work vendors here</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ background: "#f8f9fc" }}>{["Name", "Type", "Phone", "GST", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {suppliers.map((s, i) => (
+                  <tr key={s.id} style={{ borderTop: "1px solid #f0f0f0", background: i % 2 ? "#fafafa" : "white" }}>
+                    <td style={S.td}>
+                      <div style={{ fontWeight: 600 }}>{s.name}</div>
+                      {s.city || s.contact_person ? <div style={{ color: "#adb5bd", fontSize: 11 }}>{[s.contact_person, s.city].filter(Boolean).join(" · ")}</div> : null}
+                    </td>
+                    <td style={S.td}><span style={S.pill("#eef2ff", "#3730a3")}>{KIND_LABEL[s.kind] || s.kind}</span></td>
+                    <td style={S.td}>{s.phone || "—"}</td>
+                    <td style={S.td}>{s.gst || "—"}</td>
+                    <td style={{ ...S.td, textAlign: "right" }}>
+                      <div style={{ display: "inline-flex", gap: 6 }}>
+                        <button onClick={() => openHistory(s)} title="History" style={{ background: "#f1f3f5", border: "none", borderRadius: 8, padding: "6px 8px", cursor: "pointer", color: "#495057", display: "inline-flex", alignItems: "center", fontSize: 12, fontWeight: 600 }}><History size={13} /></button>
+                        <button onClick={() => startEdit(s)} title="Edit" style={{ background: "#e8f4fd", border: "none", borderRadius: 8, padding: "6px 8px", cursor: "pointer", color: "#1565c0", display: "inline-flex", alignItems: "center" }}><Pencil size={13} /></button>
+                        {isAdmin && <DelBtn onClick={() => doDelete(`/suppliers/${s.id}`, reload)} />}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {history && (
+        <div onClick={() => setHistory(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 200 }}>
+          <div onClick={e => e.stopPropagation()} style={{ ...S.card, width: "100%", maxWidth: 560, maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
+            <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={S.h3}><Users size={15} /> {history.name}</h3>
+              <X size={18} style={{ cursor: "pointer" }} onClick={() => setHistory(null)} />
+            </div>
+            <div style={{ padding: 20, overflowY: "auto" }}>
+              <div style={{ fontSize: 13, color: "#6c757d", marginBottom: 14 }}>
+                {[history.contact_person, history.phone, history.gst, history.city].filter(Boolean).join(" · ") || "No contact details"}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 18 }}>
+                <div style={{ background: "#f8f9fc", borderRadius: 10, padding: 12, textAlign: "center" }}>
+                  <div style={{ fontSize: 20, fontWeight: 900, color: "#1565c0" }}>₹{(history.total_purchased || 0).toLocaleString("en-IN")}</div>
+                  <div style={{ fontSize: 11, color: "#6c757d" }}>Purchased</div>
+                </div>
+                <div style={{ background: "#f8f9fc", borderRadius: 10, padding: 12, textAlign: "center" }}>
+                  <div style={{ fontSize: 20, fontWeight: 900, color: "#b71c1c" }}>₹{(history.total_debited || 0).toLocaleString("en-IN")}</div>
+                  <div style={{ fontSize: 11, color: "#6c757d" }}>Debited (defects)</div>
+                </div>
+                <div style={{ background: "#f8f9fc", borderRadius: 10, padding: 12, textAlign: "center" }}>
+                  <div style={{ fontSize: 20, fontWeight: 900 }}>{history.total_bills || 0}</div>
+                  <div style={{ fontSize: 11, color: "#6c757d" }}>Bills</div>
+                </div>
+              </div>
+              {history.jobwork_count > 0 && (
+                <div style={{ background: "#fff8e1", borderRadius: 10, padding: 12, marginBottom: 18, fontSize: 13, color: "#7a5b00" }}>
+                  Job work: {history.jobwork_count} job(s) · {history.jobwork_metres_sent} m sent · {history.jobwork_shrinkage} m shrinkage
+                </div>
+              )}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#495057", marginBottom: 8 }}>RECENT BILLS</div>
+              {(!history.recent_bills || history.recent_bills.length === 0) ? (
+                <div style={{ color: "#adb5bd", fontSize: 13 }}>No purchase bills yet</div>
+              ) : history.recent_bills.map((b, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f0f0f0", fontSize: 13 }}>
+                  <span>{b.invoice_number || "(no invoice)"} · {b.lots} lot(s)</span>
+                  <span style={{ color: "#6c757d" }}>{b.purchase_date ? new Date(b.purchase_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : ""} · <b>₹{(b.total_cost || 0).toLocaleString("en-IN")}</b></span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─────────────────────────── FABRICS TAB ─────────────────────────── */
-function FabricsTab({ fabrics, reload, isAdmin }) {
-  const [form, setForm] = useState({ fabric_name: "", fabric_type: "grey", composition: "", supplier_name: "", low_stock_threshold: "" });
+function FabricsTab({ fabrics, reload, isAdmin, suppliers, reloadSuppliers }) {
+  const [form, setForm] = useState({ fabric_name: "", fabric_type: "grey", composition: "", supplier_id: "", low_stock_threshold: "" });
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState(null); // { fabric_name, events }
@@ -126,9 +324,15 @@ function FabricsTab({ fabrics, reload, isAdmin }) {
   const submit = async (e) => {
     e.preventDefault(); setLoading(true); setMsg("");
     try {
-      await api.post("/fabric/", { ...form, low_stock_threshold: parseFloat(form.low_stock_threshold) || 0 });
+      await api.post("/fabric/", {
+        fabric_name: form.fabric_name,
+        fabric_type: form.fabric_type,
+        composition: form.composition,
+        supplier_id: form.supplier_id ? parseInt(form.supplier_id) : null,
+        low_stock_threshold: parseFloat(form.low_stock_threshold) || 0,
+      });
       setMsg("✅ Fabric added!");
-      setForm({ fabric_name: "", fabric_type: "grey", composition: "", supplier_name: "", low_stock_threshold: "" });
+      setForm({ fabric_name: "", fabric_type: "grey", composition: "", supplier_id: "", low_stock_threshold: "" });
       reload();
     } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
     finally { setLoading(false); }
@@ -164,8 +368,9 @@ function FabricsTab({ fabrics, reload, isAdmin }) {
           </div>
           <div style={{ marginBottom: 14 }}>
             <label style={S.label}>Default Supplier (optional)</label>
-            <input style={S.input} placeholder="e.g. Surat Mills" value={form.supplier_name}
-              onChange={e => setForm(f => ({ ...f, supplier_name: e.target.value }))} />
+            <SupplierSelect suppliers={suppliers} value={form.supplier_id} kind="fabric"
+              reloadSuppliers={reloadSuppliers} placeholder="Select supplier…"
+              onChange={v => setForm(f => ({ ...f, supplier_id: v }))} />
           </div>
           <div style={{ marginBottom: 18 }}>
             <label style={S.label}>Low-stock alert below (metres)</label>
@@ -250,9 +455,9 @@ function FabricsTab({ fabrics, reload, isAdmin }) {
 }
 
 /* ─────────────────────────── PURCHASE TAB (multi-fabric bill) ─────────────────────────── */
-function PurchaseTab({ fabrics, purchases, reload, isAdmin }) {
+function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSuppliers }) {
   const blankLine = { fabric_id: "", metres_received: "", num_rolls: "", cost_per_metre: "" };
-  const [bill, setBill] = useState({ supplier_name: "", invoice_number: "", notes: "" });
+  const [bill, setBill] = useState({ supplier_id: "", invoice_number: "", notes: "" });
   const [lines, setLines] = useState([{ ...blankLine }]);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
@@ -265,12 +470,13 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin }) {
 
   const submit = async (e) => {
     e.preventDefault(); setMsg("");
+    if (!bill.supplier_id) { setMsg("Choose a supplier"); return; }
     const valid = lines.filter(l => l.fabric_id && parseFloat(l.metres_received) > 0);
     if (!valid.length) { setMsg("Add at least one fabric line with metres"); return; }
     setLoading(true);
     try {
       const { data } = await api.post("/fabric/purchase", {
-        supplier_name: bill.supplier_name,
+        supplier_id: parseInt(bill.supplier_id),
         invoice_number: bill.invoice_number,
         notes: bill.notes,
         lines: valid.map(l => ({
@@ -281,7 +487,7 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin }) {
         })),
       });
       setMsg(`✅ Bill saved! ${data.lots_created} lot(s) created: ${data.lot_codes.join(", ")}. Now do Fabric QC on them.`);
-      setBill({ supplier_name: "", invoice_number: "", notes: "" });
+      setBill({ supplier_id: "", invoice_number: "", notes: "" });
       setLines([{ ...blankLine }]);
       reload();
     } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
@@ -294,13 +500,16 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin }) {
         <div style={S.header}><h3 style={S.h3}><Truck size={15} /> Record Purchase Bill</h3></div>
         <form onSubmit={submit} style={{ padding: 20 }}>
           <Msg msg={msg} />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-            <div><label style={S.label}>Supplier</label>
-              <input style={S.input} placeholder="e.g. Surat Mills" value={bill.supplier_name}
-                onChange={e => setBill(b => ({ ...b, supplier_name: e.target.value }))} required /></div>
-            <div><label style={S.label}>Invoice No.</label>
-              <input style={S.input} placeholder="e.g. INV-5501" value={bill.invoice_number}
-                onChange={e => setBill(b => ({ ...b, invoice_number: e.target.value }))} /></div>
+          <div style={{ marginBottom: 14 }}>
+            <label style={S.label}>Supplier</label>
+            <SupplierSelect suppliers={suppliers} value={bill.supplier_id} kind="fabric"
+              reloadSuppliers={reloadSuppliers} placeholder="Select supplier…"
+              onChange={v => setBill(b => ({ ...b, supplier_id: v }))} />
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <label style={S.label}>Invoice No.</label>
+            <input style={S.input} placeholder="e.g. INV-5501" value={bill.invoice_number}
+              onChange={e => setBill(b => ({ ...b, invoice_number: e.target.value }))} />
           </div>
 
           <label style={S.label}>Fabrics on this bill</label>
@@ -647,8 +856,8 @@ function DefectiveTab({ defective, reload, isAdmin }) {
 }
 
 /* ─────────────────────────── JOB WORK TAB ─────────────────────────── */
-function JobWorkTab({ fabrics, jobWork, reload, isAdmin }) {
-  const [form, setForm] = useState({ fabric_id: "", job_type: "printing", vendor_name: "", metres_sent: "", notes: "" });
+function JobWorkTab({ fabrics, jobWork, reload, isAdmin, suppliers, reloadSuppliers }) {
+  const [form, setForm] = useState({ fabric_id: "", job_type: "printing", vendor_id: "", metres_sent: "", notes: "" });
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [returning, setReturning] = useState(null);
@@ -661,12 +870,12 @@ function JobWorkTab({ fabrics, jobWork, reload, isAdmin }) {
       await api.post("/fabric/job-work", {
         fabric_id: parseInt(form.fabric_id),
         job_type: form.job_type,
-        vendor_name: form.vendor_name,
+        vendor_id: form.vendor_id ? parseInt(form.vendor_id) : null,
         metres_sent: parseFloat(form.metres_sent),
         notes: form.notes,
       });
       setMsg("✅ Sent out!");
-      setForm({ fabric_id: "", job_type: "printing", vendor_name: "", metres_sent: "", notes: "" });
+      setForm({ fabric_id: "", job_type: "printing", vendor_id: "", metres_sent: "", notes: "" });
       reload();
     } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
     finally { setLoading(false); }
@@ -705,9 +914,10 @@ function JobWorkTab({ fabrics, jobWork, reload, isAdmin }) {
             </select>
           </div>
           <div style={{ marginBottom: 14 }}>
-            <label style={S.label}>Vendor Name</label>
-            <input style={S.input} placeholder="e.g. ABC Printers" value={form.vendor_name}
-              onChange={e => setForm(f => ({ ...f, vendor_name: e.target.value }))} required />
+            <label style={S.label}>Vendor</label>
+            <SupplierSelect suppliers={suppliers} value={form.vendor_id} kind="jobwork"
+              reloadSuppliers={reloadSuppliers} placeholder="Select vendor…"
+              onChange={v => setForm(f => ({ ...f, vendor_id: v }))} />
           </div>
           <div style={{ marginBottom: 18 }}>
             <label style={S.label}>Metres Sent</label>

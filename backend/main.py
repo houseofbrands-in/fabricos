@@ -20,6 +20,7 @@ from routes.admin import router as admin_router
 from routes.ironing import router as ironing_router
 from routes.packing import router as packing_router
 from routes.fabric import router as fabric_router
+from routes.suppliers import router as suppliers_router
 
 app = FastAPI(title="FabricOS API", version="1.0.0")
 
@@ -43,6 +44,7 @@ app.include_router(admin_router)
 app.include_router(ironing_router)
 app.include_router(packing_router)
 app.include_router(fabric_router)
+app.include_router(suppliers_router)
 
 
 # File serving (uploads + QR codes from /tmp)
@@ -72,6 +74,9 @@ LIGHT_MIGRATIONS = [
     ("qc_logs", "scrapped_qty", "INTEGER DEFAULT 0"),
     ("fabrics", "composition", "VARCHAR(200)"),
     ("fabric_intake", "purchase_bill_id", "INTEGER"),
+    ("fabrics", "supplier_id", "INTEGER"),
+    ("purchase_bills", "supplier_id", "INTEGER"),
+    ("job_work", "vendor_id", "INTEGER"),
 ]
 
 

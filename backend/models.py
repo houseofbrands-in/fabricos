@@ -92,6 +92,20 @@ class QCLog(Base):
 #  PHASE 2 — FABRIC MODULE
 # ════════════════════════════════════════════════════════════════════════════
 
+class Supplier(Base):
+    """Master list of suppliers (fabric) and vendors (job work). One per party."""
+    __tablename__ = "suppliers"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    phone = Column(String(40))
+    gst = Column(String(40))
+    city = Column(String(100))
+    contact_person = Column(String(120))
+    notes = Column(Text)
+    kind = Column(String(20), default="fabric")   # fabric | jobwork | both
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Fabric(Base):
     """Master list of every fabric the factory buys."""
     __tablename__ = "fabrics"
@@ -99,6 +113,7 @@ class Fabric(Base):
     fabric_name = Column(String(200), nullable=False)      # e.g. "Cotton Poplin White 60s"
     fabric_type = Column(String(20), nullable=False)       # grey | dyed
     composition = Column(String(200))                       # e.g. "100% Cotton, 60s"
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     supplier_name = Column(String(200))
     low_stock_threshold = Column(Numeric(10, 2), default=0)  # alert below this many metres
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -113,7 +128,8 @@ class PurchaseBill(Base):
     """One supplier bill / invoice — can contain several fabrics (each becomes a lot)."""
     __tablename__ = "purchase_bills"
     id = Column(Integer, primary_key=True)
-    supplier_name = Column(String(200), nullable=False)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
+    supplier_name = Column(String(200), nullable=False)   # snapshot at time of bill
     invoice_number = Column(String(100))
     purchase_date = Column(DateTime, default=datetime.utcnow)
     notes = Column(Text)
@@ -167,6 +183,7 @@ class JobWork(Base):
     id = Column(Integer, primary_key=True)
     fabric_id = Column(Integer, ForeignKey("fabrics.id"))
     design_id = Column(Integer, ForeignKey("designs.id"), nullable=True)
+    vendor_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     job_type = Column(String(20))          # printing | embroidery
     vendor_name = Column(String(200))
     date_sent = Column(DateTime, default=datetime.utcnow)
