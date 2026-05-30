@@ -41,8 +41,13 @@ function DelBtn({ onClick }) {
 
 async function doDelete(url, reload) {
   if (!window.confirm("Delete this permanently? This cannot be undone.")) return;
-  try { await api.delete(url); reload(); }
-  catch (e) { alert(e.response?.data?.detail || "Could not delete"); }
+  try {
+    await api.delete(url);
+  } catch (e) {
+    // 404 = the item was already removed (e.g. cleared by a cascade). Just refresh quietly.
+    if (e.response?.status !== 404) alert(e.response?.data?.detail || "Could not delete");
+  }
+  reload();
 }
 
 export default function Store() {
@@ -102,11 +107,11 @@ export default function Store() {
         ))}
       </div>
 
-      {tab === "fabrics" && <FabricsTab fabrics={fabrics} reload={loadFabrics} isAdmin={isAdmin} />}
-      {tab === "purchase" && <PurchaseTab fabrics={fabrics} purchases={purchases} isAdmin={isAdmin} reload={() => { loadPurchases(); loadFabrics(); loadQcPending(); }} />}
-      {tab === "qc" && <QCTab pending={qcPending} reload={() => { loadQcPending(); loadPurchases(); loadFabrics(); loadDefective(); }} />}
-      {tab === "defective" && <DefectiveTab defective={defective} isAdmin={isAdmin} reload={() => { loadDefective(); loadFabrics(); }} />}
-      {tab === "jobwork" && <JobWorkTab fabrics={fabrics} jobWork={jobWork} isAdmin={isAdmin} reload={() => { loadJobWork(); loadFabrics(); }} />}
+      {tab === "fabrics" && <FabricsTab fabrics={fabrics} reload={loadAll} isAdmin={isAdmin} />}
+      {tab === "purchase" && <PurchaseTab fabrics={fabrics} purchases={purchases} isAdmin={isAdmin} reload={loadAll} />}
+      {tab === "qc" && <QCTab pending={qcPending} reload={loadAll} />}
+      {tab === "defective" && <DefectiveTab defective={defective} isAdmin={isAdmin} reload={loadAll} />}
+      {tab === "jobwork" && <JobWorkTab fabrics={fabrics} jobWork={jobWork} isAdmin={isAdmin} reload={loadAll} />}
     </Layout>
   );
 }
