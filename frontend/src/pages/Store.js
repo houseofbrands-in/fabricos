@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
+import { useAuth } from "../context/AuthContext";
 import { Layers, Plus, Truck, ClipboardCheck, PackageCheck, AlertTriangle, ArrowLeft, Trash2, X, History, RefreshCw } from "lucide-react";
 
 const S = {
@@ -30,7 +31,23 @@ function Msg({ msg }) {
   return <div style={{ background: ok ? "#d1f5ea" : "#ffe0e3", borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: 13, color: ok ? "#1b5e20" : "#b71c1c" }}>{msg}</div>;
 }
 
+function DelBtn({ onClick }) {
+  return (
+    <button onClick={onClick} title="Delete" style={{ background: "#ffe0e3", border: "none", borderRadius: 8, padding: "6px 8px", cursor: "pointer", color: "#b71c1c", display: "inline-flex", alignItems: "center" }}>
+      <Trash2 size={13} />
+    </button>
+  );
+}
+
+async function doDelete(url, reload) {
+  if (!window.confirm("Delete this permanently? This cannot be undone.")) return;
+  try { await api.delete(url); reload(); }
+  catch (e) { alert(e.response?.data?.detail || "Could not delete"); }
+}
+
 export default function Store() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [tab, setTab] = useState("fabrics");
   const [fabrics, setFabrics] = useState([]);
   const [purchases, setPurchases] = useState([]);
@@ -85,17 +102,17 @@ export default function Store() {
         ))}
       </div>
 
-      {tab === "fabrics" && <FabricsTab fabrics={fabrics} reload={loadFabrics} />}
-      {tab === "purchase" && <PurchaseTab fabrics={fabrics} purchases={purchases} reload={() => { loadPurchases(); loadFabrics(); loadQcPending(); }} />}
+      {tab === "fabrics" && <FabricsTab fabrics={fabrics} reload={loadFabrics} isAdmin={isAdmin} />}
+      {tab === "purchase" && <PurchaseTab fabrics={fabrics} purchases={purchases} isAdmin={isAdmin} reload={() => { loadPurchases(); loadFabrics(); loadQcPending(); }} />}
       {tab === "qc" && <QCTab pending={qcPending} reload={() => { loadQcPending(); loadPurchases(); loadFabrics(); loadDefective(); }} />}
-      {tab === "defective" && <DefectiveTab defective={defective} reload={() => { loadDefective(); loadFabrics(); }} />}
-      {tab === "jobwork" && <JobWorkTab fabrics={fabrics} jobWork={jobWork} reload={() => { loadJobWork(); loadFabrics(); }} />}
+      {tab === "defective" && <DefectiveTab defective={defective} isAdmin={isAdmin} reload={() => { loadDefective(); loadFabrics(); }} />}
+      {tab === "jobwork" && <JobWorkTab fabrics={fabrics} jobWork={jobWork} isAdmin={isAdmin} reload={() => { loadJobWork(); loadFabrics(); }} />}
     </Layout>
   );
 }
 
 /* ─────────────────────────── FABRICS TAB ─────────────────────────── */
-function FabricsTab({ fabrics, reload }) {
+function FabricsTab({ fabrics, reload, isAdmin }) {
   const [form, setForm] = useState({ fabric_name: "", fabric_type: "grey", composition: "", supplier_name: "", low_stock_threshold: "" });
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
@@ -184,9 +201,12 @@ function FabricsTab({ fabrics, reload }) {
                     <td style={S.td}>{f.consumed} m</td>
                     <td style={S.td}>{f.shrinkage_lost} m</td>
                     <td style={{ ...S.td, textAlign: "right" }}>
-                      <button onClick={() => openHistory(f)} title="History" style={{ background: "#f1f3f5", border: "none", borderRadius: 8, padding: "6px 8px", cursor: "pointer", color: "#495057", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 600 }}>
-                        <History size={13} /> History
-                      </button>
+                      <div style={{ display: "inline-flex", gap: 6 }}>
+                        <button onClick={() => openHistory(f)} title="History" style={{ background: "#f1f3f5", border: "none", borderRadius: 8, padding: "6px 8px", cursor: "pointer", color: "#495057", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 600 }}>
+                          <History size={13} /> History
+                        </button>
+                        {isAdmin && <DelBtn onClick={() => doDelete(`/fabric/${f.id}`, reload)} />}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -225,7 +245,7 @@ function FabricsTab({ fabrics, reload }) {
 }
 
 /* ─────────────────────────── PURCHASE TAB (multi-fabric bill) ─────────────────────────── */
-function PurchaseTab({ fabrics, purchases, reload }) {
+function PurchaseTab({ fabrics, purchases, reload, isAdmin }) {
   const blankLine = { fabric_id: "", metres_received: "", num_rolls: "", cost_per_metre: "" };
   const [bill, setBill] = useState({ supplier_name: "", invoice_number: "", notes: "" });
   const [lines, setLines] = useState([{ ...blankLine }]);
@@ -327,7 +347,10 @@ function PurchaseTab({ fabrics, purchases, reload }) {
                     {p.invoice_number ? <span style={{ color: "#6c757d", fontSize: 12 }}> · Inv {p.invoice_number}</span> : null}
                     <div style={{ fontSize: 11, color: "#adb5bd" }}>{p.purchase_date ? new Date(p.purchase_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : ""}</div>
                   </div>
-                  <span style={S.pill("#e8f4fd", "#1565c0")}>₹{(p.total_cost || 0).toLocaleString("en-IN")}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={S.pill("#e8f4fd", "#1565c0")}>₹{(p.total_cost || 0).toLocaleString("en-IN")}</span>
+                    {isAdmin && <DelBtn onClick={() => doDelete(`/fabric/purchase/${p.id}`, reload)} />}
+                  </div>
                 </div>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <tbody>
@@ -471,7 +494,7 @@ function QCTab({ pending, reload }) {
 }
 
 /* ─────────────────────────── DEFECTIVE TAB ─────────────────────────── */
-function DefectiveTab({ defective, reload }) {
+function DefectiveTab({ defective, reload, isAdmin }) {
   const [resolving, setResolving] = useState(null);
   const [form, setForm] = useState({ decision: "return", amount_debited: "", notes: "" });
   const [msg, setMsg] = useState("");
@@ -511,7 +534,14 @@ function DefectiveTab({ defective, reload }) {
             </div>
             <div style={{ marginBottom: 14 }}>
               <label style={S.label}>Decision</label>
-              <select style={S.input} value={form.decision} onChange={e => setForm(f => ({ ...f, decision: e.target.value }))}>
+              <select style={S.input} value={form.decision} onChange={e => {
+                const dec = e.target.value;
+                setForm(f => ({
+                  ...f, decision: dec,
+                  amount_debited: (dec === "return" || dec === "downgrade") && !f.amount_debited && resolving.suggested_debit
+                    ? String(resolving.suggested_debit) : f.amount_debited,
+                }));
+              }}>
                 <option value="return">Return to vendor</option>
                 <option value="replacement">Replacement coming</option>
                 <option value="downgrade">Downgrade & keep (debit vendor)</option>
@@ -569,7 +599,10 @@ function DefectiveTab({ defective, reload }) {
                       <td style={S.td}>{d.metres_rejected} m</td>
                       <td style={S.td}>{d.defect_types?.join(", ") || "—"}</td>
                       <td style={{ ...S.td, textAlign: "right" }}>
-                        <button onClick={() => start(d)} style={{ ...S.btn, padding: "7px 14px", fontSize: 13 }}>Resolve</button>
+                        <div style={{ display: "inline-flex", gap: 6 }}>
+                          <button onClick={() => start(d)} style={{ ...S.btn, padding: "7px 14px", fontSize: 13 }}>Resolve</button>
+                          {isAdmin && <DelBtn onClick={() => doDelete(`/fabric/defective/${d.id}`, reload)} />}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -586,7 +619,7 @@ function DefectiveTab({ defective, reload }) {
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr style={{ background: "#f8f9fc" }}>{["Lot", "Fabric", "Rejected", "Decision", "Debited"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                <thead><tr style={{ background: "#f8f9fc" }}>{["Lot", "Fabric", "Rejected", "Decision", "Debited", ...(isAdmin ? [""] : [])].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
                 <tbody>
                   {resolved.map((d, i) => (
                     <tr key={d.id} style={{ borderTop: "1px solid #f0f0f0", background: i % 2 ? "#fafafa" : "white" }}>
@@ -595,6 +628,7 @@ function DefectiveTab({ defective, reload }) {
                       <td style={S.td}>{d.metres_rejected} m</td>
                       <td style={S.td}><span style={S.pill("#eef2ff", "#3730a3")}>{DEC_LABEL[d.decision] || d.decision}</span></td>
                       <td style={S.td}>{d.amount_debited != null ? `₹${d.amount_debited.toLocaleString("en-IN")}` : "—"}</td>
+                      {isAdmin && <td style={{ ...S.td, textAlign: "right" }}><DelBtn onClick={() => doDelete(`/fabric/defective/${d.id}`, reload)} /></td>}
                     </tr>
                   ))}
                 </tbody>
@@ -608,7 +642,7 @@ function DefectiveTab({ defective, reload }) {
 }
 
 /* ─────────────────────────── JOB WORK TAB ─────────────────────────── */
-function JobWorkTab({ fabrics, jobWork, reload }) {
+function JobWorkTab({ fabrics, jobWork, reload, isAdmin }) {
   const [form, setForm] = useState({ fabric_id: "", job_type: "printing", vendor_name: "", metres_sent: "", notes: "" });
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
@@ -735,7 +769,7 @@ function JobWorkTab({ fabrics, jobWork, reload }) {
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr style={{ background: "#f8f9fc" }}>{["Fabric", "Vendor", "Sent", "Returned", "Shrinkage", "Status"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                <thead><tr style={{ background: "#f8f9fc" }}>{["Fabric", "Vendor", "Sent", "Returned", "Shrinkage", "Status", ...(isAdmin ? [""] : [])].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
                 <tbody>
                   {jobWork.map((jw, i) => (
                     <tr key={jw.id} style={{ borderTop: "1px solid #f0f0f0", background: i % 2 ? "#fafafa" : "white" }}>
@@ -747,6 +781,7 @@ function JobWorkTab({ fabrics, jobWork, reload }) {
                       <td style={S.td}>{jw.status === "sent"
                         ? <span style={S.pill("#fff3cd", "#7a5b00")}>at vendor</span>
                         : <span style={S.pill("#d1f5ea", "#1b5e20")}>returned</span>}</td>
+                      {isAdmin && <td style={{ ...S.td, textAlign: "right" }}><DelBtn onClick={() => doDelete(`/fabric/job-work/${jw.id}`, reload)} /></td>}
                     </tr>
                   ))}
                 </tbody>

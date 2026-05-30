@@ -15,6 +15,27 @@ from fabric_utils import fabric_live_stock, fabric_stock_breakdown, log_fabric_e
 router = APIRouter(prefix="/fabric", tags=["fabric"])
 
 store_admin = require_roles("store", "admin")
+admin_only = require_roles("admin")
+
+
+def _delete_lot_cascade(db, intake):
+    """Remove a lot and everything tied to it. Returns its bill_id (if any)."""
+    bill_id = intake.purchase_bill_id
+    db.query(FabricQC).filter_by(fabric_intake_id=intake.id).delete()
+    db.query(DefectiveFabric).filter_by(fabric_intake_id=intake.id).delete()
+    db.query(FabricStageHistory).filter_by(fabric_intake_id=intake.id).delete()
+    db.delete(intake)
+    return bill_id
+
+
+def _cleanup_empty_bills(db, bill_ids):
+    """Drop purchase bills that no longer have any lots."""
+    db.flush()
+    for bid in set(b for b in bill_ids if b):
+        if db.query(FabricIntake).filter_by(purchase_bill_id=bid).count() == 0:
+            bill = db.query(PurchaseBill).get(bid)
+            if bill:
+                db.delete(bill)
 
 
 def _f(v):
@@ -640,3 +661,78 @@ def list_job_work(
         "status": jw.status,
         "notes": jw.notes,
     } for jw in rows]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  DELETE (admin only) — for cleaning up test data while the system isn't live
+# ════════════════════════════════════════════════════════════════════════════
+@router.delete("/intake/{intake_id}")
+def delete_intake(intake_id: int, db: Session = Depends(get_db),
+                  current_user: User = Depends(admin_only)):
+    it = db.query(FabricIntake).get(intake_id)
+    if not it:
+        raise HTTPException(404, "Lot not found")
+    bid = _delete_lot_cascade(db, it)
+    _cleanup_empty_bills(db, [bid])
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/purchase/{bill_id}")
+def delete_purchase(bill_id: int, db: Session = Depends(get_db),
+                    current_user: User = Depends(admin_only)):
+    bill = db.query(PurchaseBill).get(bill_id)
+    if not bill:
+        raise HTTPException(404, "Bill not found")
+    for it in list(bill.lots):
+        _delete_lot_cascade(db, it)
+    db.delete(bill)
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/defective/{def_id}")
+def delete_defective(def_id: int, db: Session = Depends(get_db),
+                     current_user: User = Depends(admin_only)):
+    d = db.query(DefectiveFabric).get(def_id)
+    if not d:
+        raise HTTPException(404, "Defective entry not found")
+    db.delete(d)
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/job-work/{jw_id}")
+def delete_job_work(jw_id: int, db: Session = Depends(get_db),
+                    current_user: User = Depends(admin_only)):
+    jw = db.query(JobWork).get(jw_id)
+    if not jw:
+        raise HTTPException(404, "Job work not found")
+    db.delete(jw)
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/{fabric_id}")
+def delete_fabric(fabric_id: int, db: Session = Depends(get_db),
+                  current_user: User = Depends(admin_only)):
+    fb = db.query(Fabric).get(fabric_id)
+    if not fb:
+        raise HTTPException(404, "Fabric not found")
+    # Detach from any designs that referenced it (keeps those designs working).
+    for d in db.query(Design).filter_by(fabric_id=fabric_id).all():
+        d.fabric_id = None
+        d.metres_per_piece = None
+    # Remove every lot + its QC / defective / history.
+    bill_ids = []
+    for it in db.query(FabricIntake).filter_by(fabric_id=fabric_id).all():
+        bill_ids.append(_delete_lot_cascade(db, it))
+    # Remove fabric-level rows.
+    db.query(JobWork).filter_by(fabric_id=fabric_id).delete()
+    db.query(FabricConsumption).filter_by(fabric_id=fabric_id).delete()
+    db.query(DefectiveFabric).filter_by(fabric_id=fabric_id).delete()
+    db.query(FabricStageHistory).filter_by(fabric_id=fabric_id).delete()
+    _cleanup_empty_bills(db, bill_ids)
+    db.delete(fb)
+    db.commit()
+    return {"ok": True}
