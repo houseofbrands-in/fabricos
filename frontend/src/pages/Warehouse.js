@@ -247,26 +247,84 @@ function SkusTab({ skus, reload, isAdmin }) {
     } catch (e) { alert(e.response?.data?.detail || "Error"); }
   };
 
+  const [bulkResult, setBulkResult] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const fileRef = useRef(null);
+
+  const downloadTemplate = () => {
+    const csv = "sku_code,name,size,barcode\nDB-D011DR-A-L,Floral Dress,L,890000000001\nDB-D288DR-M,Stripe Dress,M,\n";
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = "sku_upload_template.csv"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const uploadFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBulkBusy(true); setBulkResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const { data } = await api.post("/warehouse/skus/bulk", fd);
+      setBulkResult(data);
+      reload();
+    } catch (e) { alert(e.response?.data?.detail || "Could not read the file"); }
+    finally { setBulkBusy(false); if (fileRef.current) fileRef.current.value = ""; }
+  };
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(280px,360px) 1fr", gap: 20, alignItems: "start" }}>
-      <div style={S.card}>
-        <div style={S.header}><h3 style={S.h3}><Plus size={15} /> New Master SKU</h3></div>
-        <form onSubmit={submit} style={{ padding: 20 }}>
-          <Msg msg={msg} />
-          <div style={{ marginBottom: 14 }}>
-            <label style={S.label}>SKU Code</label>
-            <input style={S.input} placeholder="e.g. DB-D011DR-A-L" value={form.sku_code} onChange={e => setForm(f => ({ ...f, sku_code: e.target.value }))} required />
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        <div style={S.card}>
+          <div style={S.header}><h3 style={S.h3}><Plus size={15} /> New Master SKU</h3></div>
+          <form onSubmit={submit} style={{ padding: 20 }}>
+            <Msg msg={msg} />
+            <div style={{ marginBottom: 14 }}>
+              <label style={S.label}>SKU Code</label>
+              <input style={S.input} placeholder="e.g. DB-D011DR-A-L" value={form.sku_code} onChange={e => setForm(f => ({ ...f, sku_code: e.target.value }))} required />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={S.label}>Product Name (optional)</label>
+              <input style={S.input} placeholder="e.g. Floral Dress" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
+              <div><label style={S.label}>Size</label><input style={S.input} placeholder="auto from code" value={form.size} onChange={e => setForm(f => ({ ...f, size: e.target.value }))} /></div>
+              <div><label style={S.label}>Barcode</label><input style={S.input} value={form.barcode} onChange={e => setForm(f => ({ ...f, barcode: e.target.value }))} /></div>
+            </div>
+            <button type="submit" style={{ ...S.btn, width: "100%", opacity: loading ? 0.7 : 1 }} disabled={loading}>{loading ? "Adding..." : "Add SKU"}</button>
+          </form>
+        </div>
+
+        <div style={S.card}>
+          <div style={S.header}><h3 style={S.h3}><PackagePlus size={15} /> Bulk Upload SKUs</h3></div>
+          <div style={{ padding: 20 }}>
+            <p style={{ fontSize: 13, color: "#6c757d", marginTop: 0 }}>Upload a CSV or Excel file with columns: <b>sku_code, name, size, barcode</b>. Only sku_code is required.</p>
+            <button onClick={downloadTemplate} style={{ background: "#eef2ff", color: "#3730a3", border: "none", borderRadius: 10, padding: "10px 14px", fontWeight: 700, cursor: "pointer", fontSize: 13, width: "100%", marginBottom: 10 }}>Download template (CSV)</button>
+            <input ref={fileRef} type="file" accept=".csv,.xlsx,.xlsm" onChange={uploadFile} style={{ display: "none" }} />
+            <button onClick={() => fileRef.current?.click()} disabled={bulkBusy} style={{ ...S.btn, width: "100%", opacity: bulkBusy ? 0.7 : 1 }}>{bulkBusy ? "Uploading..." : "Choose file & upload"}</button>
+            {bulkResult && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ background: "#d1f5ea", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: "#1b5e20", fontWeight: 700 }}>
+                  ✅ {bulkResult.created} added of {bulkResult.total} rows
+                </div>
+                {bulkResult.skipped && bulkResult.skipped.length > 0 && (
+                  <div style={{ marginTop: 8, border: "1px solid #ffe69c", borderRadius: 8, overflow: "hidden" }}>
+                    <div style={{ background: "#fff3cd", padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#7a5b00" }}>{bulkResult.skipped.length} skipped</div>
+                    <div style={{ maxHeight: 160, overflowY: "auto" }}>
+                      {bulkResult.skipped.map((s, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "5px 12px", fontSize: 12, borderTop: "1px solid #fff3cd" }}>
+                          <span>Row {s.row}{s.sku_code ? ` · ${s.sku_code}` : ""}</span>
+                          <span style={{ color: "#b71c1c" }}>{s.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-          <div style={{ marginBottom: 14 }}>
-            <label style={S.label}>Product Name (optional)</label>
-            <input style={S.input} placeholder="e.g. Floral Dress" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
-            <div><label style={S.label}>Size</label><input style={S.input} placeholder="auto from code" value={form.size} onChange={e => setForm(f => ({ ...f, size: e.target.value }))} /></div>
-            <div><label style={S.label}>Barcode</label><input style={S.input} value={form.barcode} onChange={e => setForm(f => ({ ...f, barcode: e.target.value }))} /></div>
-          </div>
-          <button type="submit" style={{ ...S.btn, width: "100%", opacity: loading ? 0.7 : 1 }} disabled={loading}>{loading ? "Adding..." : "Add SKU"}</button>
-        </form>
+        </div>
       </div>
 
       <div style={S.card}>

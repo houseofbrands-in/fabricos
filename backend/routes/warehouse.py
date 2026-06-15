@@ -1,6 +1,8 @@
 import re
+import io
+import csv
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -14,6 +16,44 @@ router = APIRouter(prefix="/warehouse", tags=["warehouse"])
 
 wh_admin = require_roles("warehouse", "admin")
 admin_only = require_roles("admin")
+
+
+# ── file reading (CSV / XLSX) — shared with marketplace uploads later ───────
+def read_table(upload: UploadFile):
+    """Return a list of dict rows from an uploaded CSV or XLSX file."""
+    raw = upload.file.read()
+    name = (upload.filename or "").lower()
+    if name.endswith(".xlsx") or name.endswith(".xlsm"):
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return []
+        headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+        out = []
+        for r in rows[1:]:
+            d = {}
+            for i, h in enumerate(headers):
+                d[h] = r[i] if i < len(r) and r[i] is not None else ""
+            out.append(d)
+        return out
+    # CSV (try utf-8 then latin-1)
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+    return list(csv.DictReader(io.StringIO(text)))
+
+
+def pick(row: dict, *names):
+    """Case/space-insensitive column lookup."""
+    lowered = {re.sub(r"[^a-z0-9]", "", str(k).lower()): v for k, v in row.items()}
+    for n in names:
+        key = re.sub(r"[^a-z0-9]", "", n.lower())
+        if key in lowered and lowered[key] not in (None, ""):
+            return str(lowered[key]).strip()
+    return ""
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -135,6 +175,49 @@ def create_sku(body: SkuIn, db: Session = Depends(get_db),
     db.commit()
     db.refresh(m)
     return _sku_dict(db, m)
+
+
+@router.post("/skus/bulk")
+async def bulk_skus(file: UploadFile = File(...), db: Session = Depends(get_db),
+                    current_user: User = Depends(wh_admin)):
+    """Upload many master SKUs at once (CSV or XLSX). Bad/duplicate rows are
+    skipped and reported — never silently dropped."""
+    try:
+        rows = read_table(file)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read the file: {e}")
+    if not rows:
+        raise HTTPException(400, "The file has no rows")
+
+    created, skipped = 0, []
+    seen = set()
+    for i, row in enumerate(rows, start=2):   # row 1 is the header
+        code = pick(row, "sku_code", "sku", "sku code", "master sku", "style")
+        if not code:
+            skipped.append({"row": i, "sku_code": "", "reason": "no SKU code"})
+            continue
+        n = norm(code)
+        if n in seen:
+            skipped.append({"row": i, "sku_code": code, "reason": "duplicate in file"})
+            continue
+        if db.query(WarehouseSku).filter(WarehouseSku.normalized_code == n).first():
+            skipped.append({"row": i, "sku_code": code, "reason": "already exists"})
+            continue
+        if db.query(WarehouseSubSku).filter(WarehouseSubSku.normalized_code == n).first():
+            skipped.append({"row": i, "sku_code": code, "reason": "already a sub-SKU"})
+            continue
+        size = pick(row, "size") or guess_size(code)
+        db.add(WarehouseSku(
+            sku_code=code, normalized_code=n,
+            name=pick(row, "name", "product", "product name", "description"),
+            size=size,
+            barcode=pick(row, "barcode", "ean", "bar code"),
+            design_code=pick(row, "design_code", "design", "design code"),
+        ))
+        seen.add(n)
+        created += 1
+    db.commit()
+    return {"created": created, "skipped": skipped, "total": len(rows)}
 
 
 @router.post("/skus/{sku_id}/subs")
