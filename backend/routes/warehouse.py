@@ -405,6 +405,58 @@ def inward(body: InwardIn, db: Session = Depends(get_db),
     }
 
 
+@router.post("/inward/bulk")
+async def inward_bulk(file: UploadFile = File(...), db: Session = Depends(get_db),
+                      current_user: User = Depends(wh_admin)):
+    """Inward many items at once. Columns: rack, sku, qty. Bad rows are skipped
+    and reported — never silently dropped."""
+    try:
+        rows = read_table(file)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read the file: {e}")
+    if not rows:
+        raise HTTPException(400, "The file has no rows")
+
+    created_units, created_rows, skipped = 0, 0, []
+    for i, row in enumerate(rows, start=2):
+        rack_code = pick(row, "rack", "rack_code", "rack code", "location", "bin")
+        sku_code = pick(row, "sku", "sku_code", "sku code", "code", "barcode")
+        qv = pick(row, "qty", "quantity", "qty.")
+        try:
+            qty = int(float(qv)) if qv else 1
+        except ValueError:
+            qty = 1
+        if not sku_code:
+            skipped.append({"row": i, "detail": "", "reason": "no SKU"})
+            continue
+        if not rack_code:
+            skipped.append({"row": i, "detail": sku_code, "reason": "no rack"})
+            continue
+        if qty <= 0:
+            skipped.append({"row": i, "detail": sku_code, "reason": "qty must be > 0"})
+            continue
+        rn = norm(rack_code)
+        rack = db.query(WarehouseRack).filter(WarehouseRack.normalized_code == rn).first()
+        if not rack:
+            rack = db.query(WarehouseRack).filter(WarehouseRack.barcode == rack_code.strip()).first()
+        if not rack:
+            skipped.append({"row": i, "detail": f"{sku_code} → {rack_code}", "reason": "rack not found"})
+            continue
+        master = resolve_master(db, sku_code)
+        if not master:
+            skipped.append({"row": i, "detail": sku_code, "reason": "SKU not in master"})
+            continue
+        db.add(WarehouseMovement(
+            master_id=master.id, rack_id=rack.id, bucket="sellable", qty=qty,
+            move_type="inward", source="manual", reference=f"Bulk · Rack {rack.code}",
+            created_by=current_user.id))
+        created_units += qty
+        created_rows += 1
+    db.commit()
+    return {"created_rows": created_rows, "created_units": created_units,
+            "total": len(rows), "skipped": skipped}
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  STOCK + MOVEMENTS
 # ════════════════════════════════════════════════════════════════════════════

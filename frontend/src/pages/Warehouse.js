@@ -139,8 +139,34 @@ function InwardTab({ racks, reload }) {
     }
   };
 
+  const [bulkResult, setBulkResult] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const bulkRef = useRef(null);
+
+  const downloadInwardTemplate = () => {
+    const csv = "rack,sku,qty\nA1,DB-D011DR-A-L,20\nA2,DB-D288DR-M,15\n";
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = "inward_template.csv"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const uploadBulk = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBulkBusy(true); setBulkResult(null);
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      const { data } = await api.post("/warehouse/inward/bulk", fd);
+      setBulkResult(data);
+      reload();
+    } catch (e) { alert(e.response?.data?.detail || "Could not read the file"); }
+    finally { setBulkBusy(false); if (bulkRef.current) bulkRef.current.value = ""; }
+  };
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(320px,440px) 1fr", gap: 20, alignItems: "start" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={S.card}>
         <div style={S.header}><h3 style={S.h3}><ScanLine size={15} /> Inward — Scan to Rack</h3></div>
         <div style={{ padding: 20 }}>
@@ -174,6 +200,37 @@ function InwardTab({ racks, reload }) {
             </div>
           )}
         </div>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.header}><h3 style={S.h3}><Upload size={15} /> Bulk Inward (file)</h3></div>
+        <div style={{ padding: 20 }}>
+          <p style={{ fontSize: 13, color: "#6c757d", marginTop: 0 }}>Upload a CSV / Excel with columns: <b>rack, sku, qty</b>. Each row adds stock to that rack.</p>
+          <button onClick={downloadInwardTemplate} style={{ background: "#eef2ff", color: "#3730a3", border: "none", borderRadius: 10, padding: "10px 14px", fontWeight: 700, cursor: "pointer", fontSize: 13, width: "100%", marginBottom: 10 }}>Download template (CSV)</button>
+          <input ref={bulkRef} type="file" accept=".csv,.xlsx,.xlsm" onChange={uploadBulk} style={{ display: "none" }} />
+          <button onClick={() => bulkRef.current?.click()} disabled={bulkBusy} style={{ ...S.btn, width: "100%", opacity: bulkBusy ? 0.7 : 1 }}>{bulkBusy ? "Uploading..." : "Choose file & upload"}</button>
+          {bulkResult && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ background: "#d1f5ea", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: "#1b5e20", fontWeight: 700 }}>
+                ✅ {bulkResult.created_units} units in ({bulkResult.created_rows} of {bulkResult.total} rows)
+              </div>
+              {bulkResult.skipped && bulkResult.skipped.length > 0 && (
+                <div style={{ marginTop: 8, border: "1px solid #ffe69c", borderRadius: 8, overflow: "hidden" }}>
+                  <div style={{ background: "#fff3cd", padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#7a5b00" }}>{bulkResult.skipped.length} skipped</div>
+                  <div style={{ maxHeight: 150, overflowY: "auto" }}>
+                    {bulkResult.skipped.map((s, i) => (
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "5px 12px", fontSize: 12, borderTop: "1px solid #fff3cd" }}>
+                        <span>Row {s.row}{s.detail ? ` · ${s.detail}` : ""}</span>
+                        <span style={{ color: "#b71c1c" }}>{s.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
       </div>
 
       <div style={S.card}>
