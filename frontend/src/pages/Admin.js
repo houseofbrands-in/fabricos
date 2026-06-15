@@ -3,7 +3,7 @@ import Layout from "../components/Layout";
 import api from "../api";
 import { Users, TrendingUp, IndianRupee, Package, Plus, Trash2, KeyRound, X } from "lucide-react";
 
-const ROLE_OPTIONS = ["designer", "cutting", "tailor", "qc", "ironing", "packing", "admin"];
+const ROLE_OPTIONS = ["designer", "cutting", "tailor", "qc", "ironing", "packing", "store", "warehouse", "admin"];
 
 export default function Admin() {
   const [wip, setWip] = useState({});

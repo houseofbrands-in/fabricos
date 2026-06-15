@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { LogOut, Scissors, Package } from "lucide-react";
+import { LogOut, Scissors, Package, Warehouse as WarehouseIcon } from "lucide-react";
 
 const ROLE_COLORS = {
   admin: "#e94560",
@@ -11,6 +11,7 @@ const ROLE_COLORS = {
   ironing: "#e65100",
   packing: "#00695c",
   store: "#5d4037",
+  warehouse: "#3949ab",
 };
 
 export default function Layout({ children }) {
@@ -44,6 +45,15 @@ export default function Layout({ children }) {
                 display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600,
               }}>
                 <Package size={13} /> Fabric
+              </button>
+            )}
+            {user.role === "admin" && (
+              <button onClick={() => navigate("/warehouse")} style={{
+                background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: 8, color: "white", cursor: "pointer", padding: "4px 10px",
+                display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600,
+              }}>
+                <WarehouseIcon size={13} /> Warehouse
               </button>
             )}
             <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 13 }}>{user.name}</span>

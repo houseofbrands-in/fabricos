@@ -46,6 +46,7 @@ export function roleHome(role) {
     ironing: "/ironing",
     packing: "/packing",
     store: "/store",
+    warehouse: "/warehouse",
   };
   return map[role] || "/login";
 }

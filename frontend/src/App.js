@@ -9,6 +9,7 @@ import Admin from "./pages/Admin";
 import Ironing from "./pages/Ironing";
 import Packing from "./pages/Packing";
 import Store from "./pages/Store";
+import Warehouse from "./pages/Warehouse";
 
 function PrivateRoute({ element, allowed }) {
   const { user } = useAuth();
@@ -37,6 +38,7 @@ export default function App() {
           <Route path="/ironing"  element={<PrivateRoute element={<Ironing />}  allowed={["ironing", "admin"]} />} />
           <Route path="/packing"  element={<PrivateRoute element={<Packing />}  allowed={["packing", "admin"]} />} />
           <Route path="/store"    element={<PrivateRoute element={<Store />}    allowed={["store", "admin"]} />} />
+          <Route path="/warehouse" element={<PrivateRoute element={<Warehouse />} allowed={["warehouse", "admin"]} />} />
           <Route path="/admin"    element={<PrivateRoute element={<Admin />}    allowed={["admin"]} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -117,7 +117,7 @@ def create_user(
 ):
     if len(body.pin) != 4 or not body.pin.isdigit():
         raise HTTPException(400, "PIN must be exactly 4 digits")
-    valid_roles = {"admin", "designer", "cutting", "tailor", "qc", "ironing", "packing", "store"}
+    valid_roles = {"admin", "designer", "cutting", "tailor", "qc", "ironing", "packing", "store", "warehouse"}
     if body.role not in valid_roles:
         raise HTTPException(400, "Invalid role")
     u = User(name=body.name.strip(), role=body.role, pin_hash=hash_pin(body.pin))

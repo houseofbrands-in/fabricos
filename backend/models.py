@@ -251,3 +251,67 @@ class FabricStageHistory(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     fabric = relationship("Fabric")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  WAREHOUSE — Finished-goods inventory (master/sub SKU, racks, stock ledger)
+# ════════════════════════════════════════════════════════════════════════════
+
+class WarehouseSku(Base):
+    """Master SKU = the real product+size. Holds the stock."""
+    __tablename__ = "wh_skus"
+    id = Column(Integer, primary_key=True)
+    sku_code = Column(String(100), nullable=False)                 # canonical master code
+    normalized_code = Column(String(100), unique=True, index=True, nullable=False)
+    name = Column(String(200))
+    size = Column(String(20))
+    barcode = Column(String(120))
+    design_code = Column(String(50))                               # optional link to design (later)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    subs = relationship("WarehouseSubSku", back_populates="master",
+                        cascade="all, delete-orphan")
+
+
+class WarehouseSubSku(Base):
+    """A channel/brand code (DressBerry, Amarasha, Myntra…) that maps to one master."""
+    __tablename__ = "wh_sub_skus"
+    id = Column(Integer, primary_key=True)
+    master_id = Column(Integer, ForeignKey("wh_skus.id"))
+    sub_code = Column(String(100), nullable=False)
+    normalized_code = Column(String(100), unique=True, index=True, nullable=False)
+    channel = Column(String(80))                                   # e.g. Amarasha, Myntra
+    barcode = Column(String(120))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    master = relationship("WarehouseSku", back_populates="subs")
+
+
+class WarehouseRack(Base):
+    """A physical, barcoded location. Stock is tracked per (master SKU × rack)."""
+    __tablename__ = "wh_racks"
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), nullable=False)
+    normalized_code = Column(String(50), unique=True, index=True, nullable=False)
+    barcode = Column(String(120))
+    zone = Column(String(80))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WarehouseMovement(Base):
+    """Append-only stock ledger. Live stock = sum of signed qty."""
+    __tablename__ = "wh_movements"
+    id = Column(Integer, primary_key=True)
+    master_id = Column(Integer, ForeignKey("wh_skus.id"))
+    rack_id = Column(Integer, ForeignKey("wh_racks.id"), nullable=True)
+    bucket = Column(String(20), default="sellable")    # sellable | quarantine
+    qty = Column(Integer, nullable=False)              # signed: +in, -out
+    move_type = Column(String(30))                     # inward|outward|return_in|restock|scrap|adjust
+    source = Column(String(40))                        # manual|myntra|flipkart|...
+    reference = Column(String(200))
+    note = Column(Text)
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    master = relationship("WarehouseSku")
+    rack = relationship("WarehouseRack")
