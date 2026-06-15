@@ -342,6 +342,31 @@ function SkusTab({ skus, reload, isAdmin }) {
     finally { setBulkBusy(false); if (fileRef.current) fileRef.current.value = ""; }
   };
 
+  const [subResult, setSubResult] = useState(null);
+  const [subBusy, setSubBusy] = useState(false);
+  const subRef = useRef(null);
+
+  const downloadSubTemplate = () => {
+    const csv = "master_sku,sub_sku,channel,barcode\nDB-D011DR-A-L,AMR-FLORAL-L,Amarasha,890999\nDB-D011DR-A-L,MYN-99231-L,Myntra,\n";
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = "sub_sku_mapping_template.csv"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const uploadSubs = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSubBusy(true); setSubResult(null);
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      const { data } = await api.post("/warehouse/subs/bulk", fd);
+      setSubResult(data);
+      reload();
+    } catch (e) { alert(e.response?.data?.detail || "Could not read the file"); }
+    finally { setSubBusy(false); if (subRef.current) subRef.current.value = ""; }
+  };
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(280px,360px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -384,6 +409,36 @@ function SkusTab({ skus, reload, isAdmin }) {
                       {bulkResult.skipped.map((s, i) => (
                         <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "5px 12px", fontSize: 12, borderTop: "1px solid #fff3cd" }}>
                           <span>Row {s.row}{s.sku_code ? ` · ${s.sku_code}` : ""}</span>
+                          <span style={{ color: "#b71c1c" }}>{s.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={S.card}>
+          <div style={S.header}><h3 style={S.h3}><Layers size={15} /> Bulk Map Sub-SKUs</h3></div>
+          <div style={{ padding: 20 }}>
+            <p style={{ fontSize: 13, color: "#6c757d", marginTop: 0 }}>Link channel codes to existing masters. Columns: <b>master_sku, sub_sku, channel, barcode</b>. The master must already exist.</p>
+            <button onClick={downloadSubTemplate} style={{ background: "#eef2ff", color: "#3730a3", border: "none", borderRadius: 10, padding: "10px 14px", fontWeight: 700, cursor: "pointer", fontSize: 13, width: "100%", marginBottom: 10 }}>Download template (CSV)</button>
+            <input ref={subRef} type="file" accept=".csv,.xlsx,.xlsm" onChange={uploadSubs} style={{ display: "none" }} />
+            <button onClick={() => subRef.current?.click()} disabled={subBusy} style={{ ...S.btn, width: "100%", opacity: subBusy ? 0.7 : 1 }}>{subBusy ? "Uploading..." : "Choose file & upload"}</button>
+            {subResult && (
+              <div style={{ marginTop: 14 }}>
+                <div style={{ background: "#d1f5ea", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: "#1b5e20", fontWeight: 700 }}>
+                  ✅ {subResult.created} mapped of {subResult.total} rows
+                </div>
+                {subResult.skipped && subResult.skipped.length > 0 && (
+                  <div style={{ marginTop: 8, border: "1px solid #ffe69c", borderRadius: 8, overflow: "hidden" }}>
+                    <div style={{ background: "#fff3cd", padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#7a5b00" }}>{subResult.skipped.length} skipped</div>
+                    <div style={{ maxHeight: 160, overflowY: "auto" }}>
+                      {subResult.skipped.map((s, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "5px 12px", fontSize: 12, borderTop: "1px solid #fff3cd" }}>
+                          <span>Row {s.row}{s.detail ? ` · ${s.detail}` : ""}</span>
                           <span style={{ color: "#b71c1c" }}>{s.reason}</span>
                         </div>
                       ))}

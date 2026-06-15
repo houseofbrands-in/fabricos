@@ -245,6 +245,55 @@ def add_sub(sku_id: int, body: SubIn, db: Session = Depends(get_db),
     return _sku_dict(db, m)
 
 
+@router.post("/subs/bulk")
+async def bulk_subs(file: UploadFile = File(...), db: Session = Depends(get_db),
+                    current_user: User = Depends(wh_admin)):
+    """Bulk-map sub-SKUs to masters. Columns: master_sku, sub_sku, channel, barcode.
+    Bad/duplicate rows are skipped and reported."""
+    try:
+        rows = read_table(file)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read the file: {e}")
+    if not rows:
+        raise HTTPException(400, "The file has no rows")
+
+    created, skipped, seen = 0, [], set()
+    for i, row in enumerate(rows, start=2):
+        master_code = pick(row, "master_sku", "master", "master sku", "master code")
+        sub_code = pick(row, "sub_sku", "sub", "sub sku", "sub code", "code")
+        channel = pick(row, "channel", "brand", "platform", "marketplace")
+        barcode = pick(row, "barcode", "ean", "bar code")
+        if not sub_code:
+            skipped.append({"row": i, "detail": "", "reason": "no sub-SKU code"})
+            continue
+        if not master_code:
+            skipped.append({"row": i, "detail": sub_code, "reason": "no master SKU"})
+            continue
+        master = db.query(WarehouseSku).filter(WarehouseSku.normalized_code == norm(master_code)).first()
+        if not master:
+            skipped.append({"row": i, "detail": f"{sub_code} → {master_code}", "reason": "master not found"})
+            continue
+        sn = norm(sub_code)
+        if sn == master.normalized_code:
+            skipped.append({"row": i, "detail": sub_code, "reason": "sub same as master"})
+            continue
+        if sn in seen:
+            skipped.append({"row": i, "detail": sub_code, "reason": "duplicate in file"})
+            continue
+        if db.query(WarehouseSku).filter(WarehouseSku.normalized_code == sn).first():
+            skipped.append({"row": i, "detail": sub_code, "reason": "already a master SKU"})
+            continue
+        if db.query(WarehouseSubSku).filter(WarehouseSubSku.normalized_code == sn).first():
+            skipped.append({"row": i, "detail": sub_code, "reason": "sub-SKU already mapped"})
+            continue
+        db.add(WarehouseSubSku(master_id=master.id, sub_code=sub_code.strip(),
+                               normalized_code=sn, channel=channel, barcode=barcode))
+        seen.add(sn)
+        created += 1
+    db.commit()
+    return {"created": created, "total": len(rows), "skipped": skipped}
+
+
 @router.delete("/skus/{sku_id}/subs/{sub_id}")
 def delete_sub(sku_id: int, sub_id: int, db: Session = Depends(get_db),
                current_user: User = Depends(wh_admin)):
