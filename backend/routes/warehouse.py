@@ -1,14 +1,17 @@
 import re
 import io
 import csv
+import json
+from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from database import get_db
 from models import (
     WarehouseSku, WarehouseSubSku, WarehouseRack, WarehouseMovement, User,
+    MarketplaceTemplate, WarehouseUploadBatch,
 )
 from auth import require_roles, get_current_user
 
@@ -433,3 +436,334 @@ def movements(limit: int = 100, db: Session = Depends(get_db),
             "at": mv.created_at.isoformat() if mv.created_at else None,
         })
     return out
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  MARKETPLACE TEMPLATES  (configurable column mapping)
+# ════════════════════════════════════════════════════════════════════════════
+class TemplateIn(BaseModel):
+    name: str
+    sku_column: str
+    qty_column: Optional[str] = ""
+    order_id_column: Optional[str] = ""
+    status_column: Optional[str] = ""
+    status_include: Optional[str] = ""
+
+
+def _tpl_dict(t):
+    return {"id": t.id, "name": t.name, "sku_column": t.sku_column,
+            "qty_column": t.qty_column, "order_id_column": t.order_id_column,
+            "status_column": t.status_column, "status_include": t.status_include}
+
+
+def get_template(db, marketplace):
+    t = None
+    if str(marketplace).isdigit():
+        t = db.query(MarketplaceTemplate).get(int(marketplace))
+    if not t:
+        t = db.query(MarketplaceTemplate).filter(
+            func.lower(MarketplaceTemplate.name) == str(marketplace).lower()).first()
+    return t
+
+
+@router.get("/templates")
+def list_templates(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return [_tpl_dict(t) for t in db.query(MarketplaceTemplate).order_by(MarketplaceTemplate.name).all()]
+
+
+@router.post("/templates")
+def create_template(body: TemplateIn, db: Session = Depends(get_db),
+                    current_user: User = Depends(wh_admin)):
+    if not body.name.strip() or not body.sku_column.strip():
+        raise HTTPException(400, "Name and SKU column are required")
+    if db.query(MarketplaceTemplate).filter(func.lower(MarketplaceTemplate.name) == body.name.lower()).first():
+        raise HTTPException(400, f"Template '{body.name}' already exists")
+    t = MarketplaceTemplate(
+        name=body.name.strip(), sku_column=body.sku_column.strip(),
+        qty_column=(body.qty_column or "").strip(),
+        order_id_column=(body.order_id_column or "").strip(),
+        status_column=(body.status_column or "").strip(),
+        status_include=(body.status_include or "").strip())
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+    return _tpl_dict(t)
+
+
+@router.patch("/templates/{tid}")
+def update_template(tid: int, body: TemplateIn, db: Session = Depends(get_db),
+                    current_user: User = Depends(wh_admin)):
+    t = db.query(MarketplaceTemplate).get(tid)
+    if not t:
+        raise HTTPException(404, "Template not found")
+    t.name = body.name.strip()
+    t.sku_column = body.sku_column.strip()
+    t.qty_column = (body.qty_column or "").strip()
+    t.order_id_column = (body.order_id_column or "").strip()
+    t.status_column = (body.status_column or "").strip()
+    t.status_include = (body.status_include or "").strip()
+    db.commit()
+    return _tpl_dict(t)
+
+
+@router.delete("/templates/{tid}")
+def delete_template(tid: int, db: Session = Depends(get_db),
+                    current_user: User = Depends(admin_only)):
+    t = db.query(MarketplaceTemplate).get(tid)
+    if not t:
+        raise HTTPException(404, "Template not found")
+    db.delete(t)
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/templates/headers")
+async def template_headers(file: UploadFile = File(...), db: Session = Depends(get_db),
+                           current_user: User = Depends(wh_admin)):
+    """Read just the column headers of an uploaded dummy file, for re-mapping."""
+    try:
+        rows = read_table(file)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read the file: {e}")
+    headers = list(rows[0].keys()) if rows else []
+    return {"headers": [h for h in headers if str(h).strip()]}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  UPLOAD ENGINE  (parse → resolve → FIFO pick allocation)
+# ════════════════════════════════════════════════════════════════════════════
+def parse_order_file(rows, t):
+    """Aggregate quantity per SKU code, applying the template's status filter."""
+    includes = [s.strip().lower() for s in (t.status_include or "").split(",") if s.strip()]
+    agg, considered = {}, 0
+    for row in rows:
+        if t.status_column and includes:
+            st = pick(row, t.status_column).lower()
+            if st and st not in includes:
+                continue
+        code = pick(row, t.sku_column)
+        if not code:
+            continue
+        if t.qty_column:
+            qv = pick(row, t.qty_column)
+            try:
+                qn = int(float(qv)) if qv else 1
+            except ValueError:
+                qn = 1
+        else:
+            qn = 1
+        agg[code] = agg.get(code, 0) + qn
+        considered += 1
+    return agg, considered
+
+
+def resolve_and_split(db, agg):
+    matched, unmatched = {}, []
+    for code, qty in agg.items():
+        m = resolve_master(db, code)
+        if m:
+            if m.id in matched:
+                matched[m.id]["qty"] += qty
+            else:
+                matched[m.id] = {"master": m, "qty": qty}
+        else:
+            unmatched.append({"code": code, "qty": qty})
+    return matched, unmatched
+
+
+def allocate_picks(db, master_id, needed):
+    """FIFO: pull from the rack whose stock arrived earliest first."""
+    rows = (db.query(WarehouseMovement.rack_id,
+                     func.sum(WarehouseMovement.qty).label("q"),
+                     func.min(WarehouseMovement.created_at).label("first"))
+            .filter(WarehouseMovement.master_id == master_id,
+                    WarehouseMovement.bucket == "sellable",
+                    WarehouseMovement.rack_id.isnot(None))
+            .group_by(WarehouseMovement.rack_id).all())
+    racks = sorted([(r.rack_id, int(r.q or 0), r.first) for r in rows if int(r.q or 0) > 0],
+                   key=lambda x: (x[2] or datetime.min))
+    plan, remaining = [], needed
+    for rid, avail, _ in racks:
+        if remaining <= 0:
+            break
+        take = min(avail, remaining)
+        rack = db.query(WarehouseRack).get(rid)
+        plan.append({"rack_id": rid, "rack_code": rack.code if rack else "?", "qty": take})
+        remaining -= take
+    return plan, max(0, remaining)
+
+
+def _build_lines(db, matched):
+    lines = []
+    for mid, info in matched.items():
+        plan, shortfall = allocate_picks(db, mid, info["qty"])
+        m = info["master"]
+        lines.append({
+            "master_id": mid, "sku_code": m.sku_code, "name": m.name, "size": m.size,
+            "needed": info["qty"], "available": sellable_total(db, mid),
+            "picks": plan, "shortfall": shortfall,
+        })
+    lines.sort(key=lambda x: x["sku_code"])
+    return lines
+
+
+@router.post("/upload/preview")
+async def upload_preview(marketplace: str = Form(...), file: UploadFile = File(...),
+                         db: Session = Depends(get_db), current_user: User = Depends(wh_admin)):
+    t = get_template(db, marketplace)
+    if not t:
+        raise HTTPException(404, "No template for that marketplace — set one up in Templates")
+    rows = read_table(file)
+    agg, considered = parse_order_file(rows, t)
+    matched, unmatched = resolve_and_split(db, agg)
+    lines = _build_lines(db, matched)
+    return {
+        "marketplace": t.name, "filename": file.filename,
+        "rows_total": len(rows), "rows_considered": considered,
+        "lines": lines, "unmatched": unmatched,
+        "totals": {
+            "skus": len(lines),
+            "units_needed": sum(l["needed"] for l in lines) + sum(u["qty"] for u in unmatched),
+            "units_to_pick": sum(l["needed"] - l["shortfall"] for l in lines),
+            "units_short": sum(l["shortfall"] for l in lines),
+            "unmatched_skus": len(unmatched),
+            "unmatched_units": sum(u["qty"] for u in unmatched),
+        },
+    }
+
+
+@router.post("/upload/commit")
+async def upload_commit(marketplace: str = Form(...), file: UploadFile = File(...),
+                        db: Session = Depends(get_db), current_user: User = Depends(wh_admin)):
+    t = get_template(db, marketplace)
+    if not t:
+        raise HTTPException(404, "No template for that marketplace")
+    rows = read_table(file)
+    agg, considered = parse_order_file(rows, t)
+    matched, unmatched = resolve_and_split(db, agg)
+    lines = _build_lines(db, matched)   # computed BEFORE deduction, so the guide is correct
+
+    units = 0
+    for ln in lines:
+        for p in ln["picks"]:
+            db.add(WarehouseMovement(
+                master_id=ln["master_id"], rack_id=p["rack_id"], bucket="sellable",
+                qty=-p["qty"], move_type="outward", source=t.name.lower(),
+                reference=file.filename, created_by=current_user.id))
+            units += p["qty"]
+    db.add(WarehouseUploadBatch(
+        marketplace=t.name, kind="outward", filename=file.filename,
+        rows_total=len(rows), rows_matched=len(matched), rows_unmatched=len(unmatched),
+        units=units, unmatched_json=json.dumps(unmatched), created_by=current_user.id))
+    db.commit()
+    return {"ok": True, "deducted_units": units, "lines": lines, "unmatched": unmatched,
+            "totals": {"skus": len(lines), "units_short": sum(l["shortfall"] for l in lines),
+                       "unmatched_units": sum(u["qty"] for u in unmatched)}}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  RETURNS  →  QUARANTINE  →  RESTOCK / SCRAP
+# ════════════════════════════════════════════════════════════════════════════
+@router.post("/returns/upload")
+async def returns_upload(marketplace: str = Form(...), file: UploadFile = File(...),
+                         db: Session = Depends(get_db), current_user: User = Depends(wh_admin)):
+    t = get_template(db, marketplace)
+    if not t:
+        raise HTTPException(404, "No template for that marketplace")
+    rows = read_table(file)
+    agg, considered = parse_order_file(rows, t)
+    matched, unmatched = resolve_and_split(db, agg)
+    units = 0
+    for mid, info in matched.items():
+        db.add(WarehouseMovement(
+            master_id=mid, rack_id=None, bucket="quarantine", qty=info["qty"],
+            move_type="return_in", source=t.name.lower(), reference=file.filename,
+            created_by=current_user.id))
+        units += info["qty"]
+    db.add(WarehouseUploadBatch(
+        marketplace=t.name, kind="return", filename=file.filename,
+        rows_total=len(rows), rows_matched=len(matched), rows_unmatched=len(unmatched),
+        units=units, unmatched_json=json.dumps(unmatched), created_by=current_user.id))
+    db.commit()
+    return {"ok": True, "added_to_quarantine": units,
+            "matched_skus": len(matched), "unmatched": unmatched}
+
+
+@router.get("/quarantine")
+def quarantine_list(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    rows = (db.query(WarehouseMovement.master_id, func.sum(WarehouseMovement.qty))
+            .filter(WarehouseMovement.bucket == "quarantine")
+            .group_by(WarehouseMovement.master_id).all())
+    out = []
+    for mid, qty in rows:
+        if int(qty or 0) <= 0:
+            continue
+        m = db.query(WarehouseSku).get(mid)
+        out.append({"master_id": mid, "sku_code": m.sku_code if m else "?",
+                    "name": m.name if m else "", "size": m.size if m else "",
+                    "qty": int(qty)})
+    out.sort(key=lambda x: x["sku_code"])
+    return out
+
+
+class RestockIn(BaseModel):
+    master_id: int
+    rack_code: str
+    qty: int
+
+
+@router.post("/quarantine/restock")
+def quarantine_restock(body: RestockIn, db: Session = Depends(get_db),
+                       current_user: User = Depends(wh_admin)):
+    q = quarantine_total(db, body.master_id)
+    if body.qty <= 0:
+        raise HTTPException(400, "Quantity must be at least 1")
+    if body.qty > q:
+        raise HTTPException(400, f"Only {q} in quarantine for this SKU")
+    rn = norm(body.rack_code)
+    rack = db.query(WarehouseRack).filter(WarehouseRack.normalized_code == rn).first()
+    if not rack:
+        rack = db.query(WarehouseRack).filter(WarehouseRack.barcode == body.rack_code.strip()).first()
+    if not rack:
+        raise HTTPException(404, f"Rack '{body.rack_code}' not found")
+    db.add(WarehouseMovement(master_id=body.master_id, rack_id=None, bucket="quarantine",
+                             qty=-body.qty, move_type="restock", source="manual",
+                             created_by=current_user.id))
+    db.add(WarehouseMovement(master_id=body.master_id, rack_id=rack.id, bucket="sellable",
+                             qty=body.qty, move_type="restock", source="manual",
+                             reference=f"Rack {rack.code}", created_by=current_user.id))
+    db.commit()
+    return {"ok": True, "restocked": body.qty, "rack_code": rack.code,
+            "sellable_total_now": sellable_total(db, body.master_id),
+            "quarantine_now": quarantine_total(db, body.master_id)}
+
+
+class ScrapIn(BaseModel):
+    master_id: int
+    qty: int
+
+
+@router.post("/quarantine/scrap")
+def quarantine_scrap(body: ScrapIn, db: Session = Depends(get_db),
+                     current_user: User = Depends(wh_admin)):
+    q = quarantine_total(db, body.master_id)
+    if body.qty <= 0 or body.qty > q:
+        raise HTTPException(400, f"Only {q} in quarantine for this SKU")
+    db.add(WarehouseMovement(master_id=body.master_id, rack_id=None, bucket="quarantine",
+                             qty=-body.qty, move_type="scrap", source="manual",
+                             created_by=current_user.id))
+    db.commit()
+    return {"ok": True, "scrapped": body.qty, "quarantine_now": quarantine_total(db, body.master_id)}
+
+
+@router.get("/batches")
+def list_batches(limit: int = 50, db: Session = Depends(get_db),
+                 current_user: User = Depends(get_current_user)):
+    rows = (db.query(WarehouseUploadBatch)
+            .order_by(WarehouseUploadBatch.created_at.desc()).limit(limit).all())
+    return [{
+        "id": b.id, "marketplace": b.marketplace, "kind": b.kind, "filename": b.filename,
+        "rows_total": b.rows_total, "rows_matched": b.rows_matched,
+        "rows_unmatched": b.rows_unmatched, "units": b.units,
+        "at": b.created_at.isoformat() if b.created_at else None,
+    } for b in rows]

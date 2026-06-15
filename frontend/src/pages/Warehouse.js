@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
 import { useAuth } from "../context/AuthContext";
-import { Boxes, Plus, Layers, ScanLine, Trash2, X, MapPin, PackagePlus } from "lucide-react";
+import { Boxes, Plus, Layers, ScanLine, Trash2, X, MapPin, PackagePlus, Upload, RotateCcw, AlertTriangle, SlidersHorizontal, Printer } from "lucide-react";
 
 const S = {
   card: { background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" },
@@ -41,18 +41,26 @@ export default function Warehouse() {
   const [skus, setSkus] = useState([]);
   const [racks, setRacks] = useState([]);
   const [stock, setStock] = useState({ skus: [], total_units: 0, total_quarantine: 0 });
+  const [templates, setTemplates] = useState([]);
+  const [quarantine, setQuarantine] = useState([]);
 
   const loadSkus = () => api.get("/warehouse/skus").then(r => setSkus(r.data));
   const loadRacks = () => api.get("/warehouse/racks").then(r => setRacks(r.data));
   const loadStock = () => api.get("/warehouse/stock").then(r => setStock(r.data));
-  const loadAll = () => { loadSkus(); loadRacks(); loadStock(); };
+  const loadTemplates = () => api.get("/warehouse/templates").then(r => setTemplates(r.data));
+  const loadQuarantine = () => api.get("/warehouse/quarantine").then(r => setQuarantine(r.data));
+  const loadAll = () => { loadSkus(); loadRacks(); loadStock(); loadTemplates(); loadQuarantine(); };
   useEffect(loadAll, []);
 
   const tabs = [
     ["inward", "Inward", ScanLine],
+    ["outward", "Outward", Upload],
+    ["returns", "Returns", RotateCcw],
+    ["quarantine", "Quarantine", AlertTriangle],
     ["stock", "Stock", Boxes],
     ["skus", "SKUs", Layers],
     ["racks", "Racks", MapPin],
+    ["templates", "Templates", SlidersHorizontal],
   ];
 
   return (
@@ -83,9 +91,13 @@ export default function Warehouse() {
       </div>
 
       {tab === "inward" && <InwardTab racks={racks} reload={loadAll} />}
+      {tab === "outward" && <OutwardTab templates={templates} reload={loadAll} />}
+      {tab === "returns" && <ReturnsTab templates={templates} reload={loadAll} />}
+      {tab === "quarantine" && <QuarantineTab quarantine={quarantine} reload={loadAll} />}
       {tab === "stock" && <StockTab stock={stock} />}
       {tab === "skus" && <SkusTab skus={skus} reload={loadAll} isAdmin={isAdmin} />}
       {tab === "racks" && <RacksTab racks={racks} reload={loadAll} isAdmin={isAdmin} />}
+      {tab === "templates" && <TemplatesTab templates={templates} reload={loadTemplates} isAdmin={isAdmin} />}
     </Layout>
   );
 }
@@ -474,6 +486,379 @@ function RacksTab({ racks, reload, isAdmin }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ─────────────────────────── OUTWARD (upload pick list) ─────────────────────────── */
+function printGuide(title, lines) {
+  const rows = lines.map(l => {
+    const picks = (l.picks || []).map(p => `${p.rack_code}: ${p.qty}`).join(", ") || "—";
+    const short = l.shortfall ? ` (SHORT ${l.shortfall})` : "";
+    return `<tr><td style="padding:6px 10px;border-bottom:1px solid #ddd;font-family:monospace">${l.sku_code}</td><td style="padding:6px 10px;border-bottom:1px solid #ddd">${l.name || ""}</td><td style="padding:6px 10px;border-bottom:1px solid #ddd">${l.needed}</td><td style="padding:6px 10px;border-bottom:1px solid #ddd">${picks}${short}</td></tr>`;
+  }).join("");
+  const html = `<html><head><title>${title}</title></head><body style="font-family:sans-serif">
+    <h2>${title}</h2><p>${new Date().toLocaleString("en-IN")}</p>
+    <table style="border-collapse:collapse;width:100%"><thead><tr style="background:#f0f0f0">
+    <th style="padding:6px 10px;text-align:left">SKU</th><th style="padding:6px 10px;text-align:left">Product</th><th style="padding:6px 10px;text-align:left">Qty</th><th style="padding:6px 10px;text-align:left">Pick from rack</th>
+    </tr></thead><tbody>${rows}</tbody></table></body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html); w.document.close(); w.focus(); w.print();
+}
+
+function OutwardTab({ templates, reload }) {
+  const [marketplace, setMarketplace] = useState("");
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [committed, setCommitted] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef(null);
+
+  const doPreview = async () => {
+    if (!marketplace || !file) { setMsg("Pick a marketplace and a file"); return; }
+    setBusy(true); setMsg(""); setCommitted(null); setPreview(null);
+    try {
+      const fd = new FormData(); fd.append("marketplace", marketplace); fd.append("file", file);
+      const { data } = await api.post("/warehouse/upload/preview", fd);
+      setPreview(data);
+    } catch (e) { setMsg(e.response?.data?.detail || "Could not read the file"); }
+    finally { setBusy(false); }
+  };
+
+  const doCommit = async () => {
+    if (!marketplace || !file) return;
+    if (!window.confirm("Deduct this stock now? This updates your inventory.")) return;
+    setBusy(true); setMsg("");
+    try {
+      const fd = new FormData(); fd.append("marketplace", marketplace); fd.append("file", file);
+      const { data } = await api.post("/warehouse/upload/commit", fd);
+      setCommitted(data); setPreview(null); setFile(null);
+      if (fileRef.current) fileRef.current.value = "";
+      reload();
+    } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
+    finally { setBusy(false); }
+  };
+
+  const result = committed || preview;
+  const isCommitted = !!committed;
+
+  return (
+    <div>
+      <div style={{ ...S.card, marginBottom: 20 }}>
+        <div style={S.header}><h3 style={S.h3}><Upload size={15} /> Upload Marketplace Pick List / Order File</h3></div>
+        <div style={{ padding: 20 }}>
+          <Msg msg={msg} />
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ flex: "1 1 200px" }}>
+              <label style={S.label}>Marketplace</label>
+              <select style={S.input} value={marketplace} onChange={e => { setMarketplace(e.target.value); setPreview(null); setCommitted(null); }}>
+                <option value="">Select…</option>
+                {templates.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+              </select>
+            </div>
+            <div style={{ flex: "1 1 220px" }}>
+              <label style={S.label}>File (CSV / Excel)</label>
+              <input ref={fileRef} type="file" accept=".csv,.xlsx,.xlsm" onChange={e => { setFile(e.target.files?.[0] || null); setPreview(null); setCommitted(null); }} style={{ ...S.input, padding: 8 }} />
+            </div>
+            <button onClick={doPreview} disabled={busy} style={{ ...S.btn, opacity: busy ? 0.7 : 1 }}>{busy ? "Reading..." : "Preview"}</button>
+          </div>
+          {templates.length === 0 && <div style={{ fontSize: 12, color: "#b71c1c", marginTop: 10 }}>No templates yet — set one up in the Templates tab first.</div>}
+        </div>
+      </div>
+
+      {result && (
+        <div style={S.card}>
+          <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={S.h3}>{isCommitted ? "✅ Deducted — Pick Guide" : "Preview — Pick Guide"}</h3>
+            <button onClick={() => printGuide(`${marketplace} pick guide`, result.lines)} style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}><Printer size={13} /> Print</button>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 14, fontSize: 13 }}>
+              <span><b>{result.lines.length}</b> SKUs matched</span>
+              {isCommitted ? <span><b>{committed.deducted_units}</b> units deducted</span> : <span><b>{result.totals.units_to_pick}</b> units to pick</span>}
+              {result.totals.units_short > 0 && <span style={{ color: "#b71c1c" }}><b>{result.totals.units_short}</b> short</span>}
+              {(result.totals.unmatched_units || result.totals.unmatched?.length) ? <span style={{ color: "#7a5b00" }}><b>{result.unmatched.length}</b> unmatched SKUs ({result.totals.unmatched_units} units)</span> : null}
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ background: "#f8f9fc" }}>{["SKU", "Qty", "Available", "Pick from rack", "Short"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {result.lines.map((l, i) => (
+                    <tr key={i} style={{ borderTop: "1px solid #f0f0f0" }}>
+                      <td style={S.td}><span style={{ fontFamily: "monospace", fontWeight: 700 }}>{l.sku_code}</span>{l.name ? <div style={{ fontSize: 11, color: "#adb5bd" }}>{l.name}</div> : null}</td>
+                      <td style={S.td}>{l.needed}</td>
+                      <td style={S.td}>{l.available}</td>
+                      <td style={S.td}>{l.picks && l.picks.length ? l.picks.map(p => <span key={p.rack_id} style={{ ...S.pill("#e8eaf6", "#283593"), marginRight: 4 }}>{p.rack_code}: {p.qty}</span>) : "—"}</td>
+                      <td style={S.td}>{l.shortfall ? <span style={S.pill("#ffe0e3", "#b71c1c")}>{l.shortfall}</span> : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {result.unmatched && result.unmatched.length > 0 && (
+              <div style={{ marginTop: 16, border: "1px solid #ffe69c", borderRadius: 10, overflow: "hidden" }}>
+                <div style={{ background: "#fff3cd", padding: "8px 14px", fontSize: 13, fontWeight: 700, color: "#7a5b00" }}>
+                  {result.unmatched.length} SKU(s) in the file are not in your master — skipped, not deducted. Add them (SKUs tab) and re-upload.
+                </div>
+                <div style={{ maxHeight: 180, overflowY: "auto", padding: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {result.unmatched.map((u, i) => <span key={i} style={{ background: "#f8f9fc", borderRadius: 20, padding: "3px 10px", fontSize: 12, fontFamily: "monospace" }}>{u.code} ×{u.qty}</span>)}
+                </div>
+              </div>
+            )}
+
+            {!isCommitted && (
+              <button onClick={doCommit} disabled={busy} style={{ ...S.btn, width: "100%", marginTop: 16, background: "#1b5e20" }}>
+                {busy ? "Deducting..." : "Confirm & Deduct Stock"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────── RETURNS (upload to quarantine) ─────────────────────────── */
+function ReturnsTab({ templates, reload }) {
+  const [marketplace, setMarketplace] = useState("");
+  const [file, setFile] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const fileRef = useRef(null);
+
+  const upload = async () => {
+    if (!marketplace || !file) { setMsg("Pick a marketplace and a file"); return; }
+    if (!window.confirm("Add these returns to quarantine?")) return;
+    setBusy(true); setMsg(""); setResult(null);
+    try {
+      const fd = new FormData(); fd.append("marketplace", marketplace); fd.append("file", file);
+      const { data } = await api.post("/warehouse/returns/upload", fd);
+      setResult(data); setFile(null);
+      if (fileRef.current) fileRef.current.value = "";
+      reload();
+    } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={S.card}>
+      <div style={S.header}><h3 style={S.h3}><RotateCcw size={15} /> Upload Return File → Quarantine</h3></div>
+      <div style={{ padding: 20 }}>
+        <Msg msg={msg} />
+        <p style={{ fontSize: 13, color: "#6c757d", marginTop: 0 }}>Returned items go into <b>quarantine</b> first. Inspect them in the Quarantine tab, then restock the good ones or scrap the bad ones.</p>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div style={{ flex: "1 1 200px" }}>
+            <label style={S.label}>Marketplace</label>
+            <select style={S.input} value={marketplace} onChange={e => setMarketplace(e.target.value)}>
+              <option value="">Select…</option>
+              {templates.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: "1 1 220px" }}>
+            <label style={S.label}>Return file (CSV / Excel)</label>
+            <input ref={fileRef} type="file" accept=".csv,.xlsx,.xlsm" onChange={e => setFile(e.target.files?.[0] || null)} style={{ ...S.input, padding: 8 }} />
+          </div>
+          <button onClick={upload} disabled={busy} style={{ ...S.btn, opacity: busy ? 0.7 : 1 }}>{busy ? "Uploading..." : "Add to Quarantine"}</button>
+        </div>
+        {result && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ background: "#d1f5ea", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#1b5e20", fontWeight: 700 }}>
+              ✅ {result.added_to_quarantine} unit(s) added to quarantine across {result.matched_skus} SKU(s). Go to the Quarantine tab to restock or scrap.
+            </div>
+            {result.unmatched && result.unmatched.length > 0 && (
+              <div style={{ marginTop: 10, fontSize: 12, color: "#7a5b00" }}>{result.unmatched.length} unmatched SKU(s) skipped: {result.unmatched.map(u => `${u.code}×${u.qty}`).join(", ")}</div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────── QUARANTINE ─────────────────────────── */
+function QuarantineTab({ quarantine, reload }) {
+  const [action, setAction] = useState(null); // {master_id, mode:'restock'|'scrap'}
+  const [rack, setRack] = useState("");
+  const [qty, setQty] = useState(1);
+  const [msg, setMsg] = useState("");
+
+  const start = (q, mode) => { setAction({ ...q, mode }); setRack(""); setQty(q.qty); setMsg(""); };
+
+  const submit = async () => {
+    try {
+      if (action.mode === "restock") {
+        if (!rack.trim()) { setMsg("Scan / type a rack"); return; }
+        await api.post("/warehouse/quarantine/restock", { master_id: action.master_id, rack_code: rack, qty: parseInt(qty) || 0 });
+      } else {
+        await api.post("/warehouse/quarantine/scrap", { master_id: action.master_id, qty: parseInt(qty) || 0 });
+      }
+      setAction(null); reload();
+    } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
+  };
+
+  return (
+    <div style={S.card}>
+      <div style={S.header}><h3 style={S.h3}><AlertTriangle size={15} /> Quarantine — Returns to Inspect ({quarantine.length})</h3></div>
+      {quarantine.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>Nothing in quarantine</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr style={{ background: "#f8f9fc" }}>{["SKU", "Size", "In quarantine", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {quarantine.map((q) => (
+                <Fragment key={q.master_id}>
+                  <tr style={{ borderTop: "1px solid #f0f0f0" }}>
+                    <td style={S.td}><span style={{ fontFamily: "monospace", fontWeight: 700 }}>{q.sku_code}</span>{q.name ? <div style={{ fontSize: 11, color: "#adb5bd" }}>{q.name}</div> : null}</td>
+                    <td style={S.td}>{q.size || "—"}</td>
+                    <td style={S.td}><span style={S.pill("#ffe0e3", "#b71c1c")}>{q.qty}</span></td>
+                    <td style={{ ...S.td, textAlign: "right" }}>
+                      <div style={{ display: "inline-flex", gap: 6 }}>
+                        <button onClick={() => start(q, "restock")} style={{ ...S.btn, padding: "6px 12px", fontSize: 12, background: "#1b5e20" }}>Restock</button>
+                        <button onClick={() => start(q, "scrap")} style={{ ...S.btn, padding: "6px 12px", fontSize: 12, background: "#b71c1c" }}>Scrap</button>
+                      </div>
+                    </td>
+                  </tr>
+                  {action && action.master_id === q.master_id && (
+                    <tr style={{ background: "#fafbff" }}>
+                      <td colSpan={4} style={{ padding: 14 }}>
+                        <Msg msg={msg} />
+                        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+                          {action.mode === "restock" && (
+                            <div style={{ flex: "1 1 200px" }}>
+                              <label style={S.label}>Scan / type rack to place stock</label>
+                              <input autoFocus style={S.input} value={rack} onChange={e => setRack(e.target.value)} placeholder="e.g. A1" />
+                            </div>
+                          )}
+                          <div style={{ width: 110 }}>
+                            <label style={S.label}>Qty ({action.mode})</label>
+                            <input style={S.input} type="number" min="1" max={q.qty} value={qty} onChange={e => setQty(e.target.value)} />
+                          </div>
+                          <button onClick={submit} style={{ ...S.btn, background: action.mode === "restock" ? "#1b5e20" : "#b71c1c" }}>{action.mode === "restock" ? "Restock to rack" : "Scrap"}</button>
+                          <button onClick={() => setAction(null)} style={{ ...S.btn, background: "#e9ecef", color: "#495057" }}>Cancel</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────── TEMPLATES (column mapping) ─────────────────────────── */
+function TemplatesTab({ templates, reload, isAdmin }) {
+  const blank = { name: "", sku_column: "", qty_column: "", order_id_column: "", status_column: "", status_include: "" };
+  const [form, setForm] = useState(blank);
+  const [editId, setEditId] = useState(null);
+  const [headers, setHeaders] = useState([]);
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+  const fileRef = useRef(null);
+
+  const loadHeaders = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      const { data } = await api.post("/warehouse/templates/headers", fd);
+      setHeaders(data.headers || []);
+      setMsg(data.headers?.length ? `✅ Loaded ${data.headers.length} columns from the file — pick the mappings below.` : "No columns found in that file");
+    } catch (e) { setMsg(e.response?.data?.detail || "Could not read the file"); }
+    finally { if (fileRef.current) fileRef.current.value = ""; }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault(); setLoading(true); setMsg("");
+    try {
+      if (editId) await api.patch(`/warehouse/templates/${editId}`, form);
+      else await api.post("/warehouse/templates", form);
+      setForm(blank); setEditId(null); setHeaders([]);
+      setMsg("✅ Saved!");
+      reload();
+    } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
+    finally { setLoading(false); }
+  };
+
+  const startEdit = (t) => { setEditId(t.id); setForm({ name: t.name, sku_column: t.sku_column, qty_column: t.qty_column || "", order_id_column: t.order_id_column || "", status_column: t.status_column || "", status_include: t.status_include || "" }); setHeaders([]); setMsg(""); };
+
+  const colField = (label, field, opts = {}) => (
+    <div style={{ marginBottom: 12 }}>
+      <label style={S.label}>{label}{opts.required ? " *" : ""}</label>
+      {headers.length > 0 ? (
+        <select style={S.input} value={form[field]} onChange={e => setForm(f => ({ ...f, [field]: e.target.value }))} required={opts.required}>
+          <option value="">{opts.qtyHint ? "(each row = 1 unit)" : "(none)"}</option>
+          {headers.map(h => <option key={h} value={h}>{h}</option>)}
+        </select>
+      ) : (
+        <input style={S.input} value={form[field]} onChange={e => setForm(f => ({ ...f, [field]: e.target.value }))} placeholder={opts.qtyHint ? "blank = each row is 1 unit" : "exact column name"} required={opts.required} />
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,420px) 1fr", gap: 20, alignItems: "start" }}>
+      <div style={S.card}>
+        <div style={S.header}><h3 style={S.h3}><SlidersHorizontal size={15} /> {editId ? "Edit Template" : "New Marketplace Template"}</h3></div>
+        <form onSubmit={submit} style={{ padding: 20 }}>
+          <Msg msg={msg} />
+          <div style={{ background: "#f8f9fc", borderRadius: 10, padding: 12, marginBottom: 14 }}>
+            <label style={S.label}>Load columns from a sample file (optional)</label>
+            <input ref={fileRef} type="file" accept=".csv,.xlsx,.xlsm" onChange={loadHeaders} style={{ ...S.input, padding: 8 }} />
+            <div style={{ fontSize: 11, color: "#adb5bd", marginTop: 6 }}>Upload any real file from this marketplace; we read its column names so you can map them by picking, not typing.</div>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={S.label}>Marketplace Name *</label>
+            <input style={S.input} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Flipkart" required />
+          </div>
+          {colField("SKU column", "sku_column", { required: true })}
+          {colField("Quantity column", "qty_column", { qtyHint: true })}
+          {colField("Order ID column", "order_id_column")}
+          {colField("Status column", "status_column")}
+          <div style={{ marginBottom: 16 }}>
+            <label style={S.label}>Only count these statuses (optional)</label>
+            <input style={S.input} value={form.status_include} onChange={e => setForm(f => ({ ...f, status_include: e.target.value }))} placeholder="e.g. CREATED, CONFIRMED (blank = all rows)" />
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="submit" style={{ ...S.btn, flex: 1, opacity: loading ? 0.7 : 1 }} disabled={loading}>{loading ? "Saving..." : editId ? "Update" : "Save Template"}</button>
+            {editId && <button type="button" onClick={() => { setEditId(null); setForm(blank); setHeaders([]); setMsg(""); }} style={{ ...S.btn, flex: 1, background: "#e9ecef", color: "#495057" }}>Cancel</button>}
+          </div>
+        </form>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.header}><h3 style={S.h3}><SlidersHorizontal size={15} /> Templates ({templates.length})</h3></div>
+        {templates.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No templates yet</div>
+        ) : (
+          <div style={{ padding: 12 }}>
+            {templates.map(t => (
+              <div key={t.id} style={{ border: "1px solid #f0f0f0", borderRadius: 12, padding: 14, marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 15 }}>{t.name}</div>
+                    <div style={{ fontSize: 12, color: "#6c757d", marginTop: 4 }}>
+                      SKU: <b>{t.sku_column}</b> · Qty: <b>{t.qty_column || "1 per row"}</b>
+                      {t.status_column ? <> · Status: <b>{t.status_column}</b>{t.status_include ? ` (${t.status_include})` : ""}</> : null}
+                    </div>
+                  </div>
+                  <div style={{ display: "inline-flex", gap: 6 }}>
+                    <button onClick={() => startEdit(t)} style={{ background: "#e8f4fd", border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer", color: "#1565c0", fontWeight: 700, fontSize: 12 }}>Edit</button>
+                    {isAdmin && <DelBtn onClick={() => doDelete(`/warehouse/templates/${t.id}`, reload)} />}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

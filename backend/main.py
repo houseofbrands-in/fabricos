@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from database import create_tables, SessionLocal, engine
 from sqlalchemy import inspect, text
-from models import User
+from models import User, MarketplaceTemplate
 from auth import hash_pin
 
 from routes.auth import router as auth_router
@@ -120,5 +120,11 @@ def startup():
             db.add(wh)
             db.commit()
             print("✅ Default warehouse user seeded — PIN: 2222")
+        if not db.query(MarketplaceTemplate).filter_by(name="Myntra").first():
+            db.add(MarketplaceTemplate(
+                name="Myntra", sku_column="Seller_sku_code", qty_column="",
+                order_id_column="Order id", status_column="Status", status_include=""))
+            db.commit()
+            print("✅ Myntra template seeded")
     finally:
         db.close()

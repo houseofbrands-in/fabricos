@@ -315,3 +315,33 @@ class WarehouseMovement(Base):
 
     master = relationship("WarehouseSku")
     rack = relationship("WarehouseRack")
+
+
+class MarketplaceTemplate(Base):
+    """Configurable column-mapping for a marketplace's order/return file.
+    If a marketplace renames columns, upload a dummy file and re-map here."""
+    __tablename__ = "wh_templates"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(80), nullable=False)            # e.g. Myntra
+    sku_column = Column(String(120), nullable=False)     # column holding our seller SKU
+    qty_column = Column(String(120))                     # blank => each row = 1 unit
+    order_id_column = Column(String(120))
+    status_column = Column(String(120))
+    status_include = Column(String(300))                 # csv of statuses to keep (blank = all)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WarehouseUploadBatch(Base):
+    """A record of each committed file upload (outward or return)."""
+    __tablename__ = "wh_upload_batches"
+    id = Column(Integer, primary_key=True)
+    marketplace = Column(String(80))
+    kind = Column(String(20))                 # outward | return
+    filename = Column(String(300))
+    rows_total = Column(Integer, default=0)
+    rows_matched = Column(Integer, default=0)
+    rows_unmatched = Column(Integer, default=0)
+    units = Column(Integer, default=0)        # units deducted / quarantined
+    unmatched_json = Column(Text)             # list of {code, qty}
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
