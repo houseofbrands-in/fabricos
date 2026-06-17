@@ -2,6 +2,7 @@ import re
 import io
 import csv
 import json
+import base64
 from datetime import datetime
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import (
     WarehouseSku, WarehouseSubSku, WarehouseRack, WarehouseMovement, User,
-    MarketplaceTemplate, WarehouseUploadBatch,
+    MarketplaceTemplate, WarehouseUploadBatch, AppSetting,
 )
 from auth import require_roles, get_current_user
 
@@ -868,3 +869,72 @@ def list_batches(limit: int = 50, db: Session = Depends(get_db),
         "rows_unmatched": b.rows_unmatched, "units": b.units,
         "at": b.created_at.isoformat() if b.created_at else None,
     } for b in rows]
+
+# ════════════════════════════════════════════════════════════════════════════
+#  BARCODE LABELS  (Code 128 PNG + saved default label size)
+# ════════════════════════════════════════════════════════════════════════════
+LABEL_KEY = "wh_label_size"
+DEFAULT_LABEL = {"width_mm": 50, "height_mm": 25}
+
+
+def _barcode_png_datauri(data: str) -> str:
+    from barcode import Code128
+    from barcode.writer import ImageWriter
+    buf = io.BytesIO()
+    Code128(data, writer=ImageWriter()).write(buf, options={
+        "write_text": False, "module_height": 14.0, "module_width": 0.33,
+        "quiet_zone": 2.0, "dpi": 300,
+    })
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+class BarcodeReq(BaseModel):
+    codes: List[str]
+
+
+@router.post("/barcodes")
+def make_barcodes(body: BarcodeReq, db: Session = Depends(get_db),
+                  current_user: User = Depends(get_current_user)):
+    """Return Code-128 PNG data-URIs for each code (deduped)."""
+    out = {}
+    for c in body.codes:
+        c = (c or "").strip()
+        if c and c not in out:
+            try:
+                out[c] = _barcode_png_datauri(c)
+            except Exception:
+                out[c] = ""
+    return {"barcodes": out}
+
+
+@router.get("/label-config")
+def get_label_config(db: Session = Depends(get_db),
+                     current_user: User = Depends(get_current_user)):
+    row = db.query(AppSetting).filter_by(key=LABEL_KEY).first()
+    if row and row.value:
+        try:
+            return json.loads(row.value)
+        except ValueError:
+            pass
+    return DEFAULT_LABEL
+
+
+class LabelConfig(BaseModel):
+    width_mm: float
+    height_mm: float
+
+
+@router.put("/label-config")
+def set_label_config(body: LabelConfig, db: Session = Depends(get_db),
+                     current_user: User = Depends(wh_admin)):
+    if body.width_mm <= 0 or body.height_mm <= 0:
+        raise HTTPException(400, "Label width and height must be greater than 0")
+    cfg = {"width_mm": round(body.width_mm, 1), "height_mm": round(body.height_mm, 1)}
+    row = db.query(AppSetting).filter_by(key=LABEL_KEY).first()
+    if row:
+        row.value = json.dumps(cfg)
+        row.updated_at = datetime.utcnow()
+    else:
+        db.add(AppSetting(key=LABEL_KEY, value=json.dumps(cfg)))
+    db.commit()
+    return cfg

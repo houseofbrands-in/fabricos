@@ -60,6 +60,7 @@ export default function Warehouse() {
     ["stock", "Stock", Boxes],
     ["skus", "SKUs", Layers],
     ["racks", "Racks", MapPin],
+    ["labels", "Labels", Printer],
     ["templates", "Templates", SlidersHorizontal],
   ];
 
@@ -97,6 +98,7 @@ export default function Warehouse() {
       {tab === "stock" && <StockTab stock={stock} />}
       {tab === "skus" && <SkusTab skus={skus} reload={loadAll} isAdmin={isAdmin} />}
       {tab === "racks" && <RacksTab racks={racks} reload={loadAll} isAdmin={isAdmin} />}
+      {tab === "labels" && <LabelsTab skus={skus} racks={racks} />}
       {tab === "templates" && <TemplatesTab templates={templates} reload={loadTemplates} isAdmin={isAdmin} />}
     </Layout>
   );
@@ -970,6 +972,140 @@ function TemplatesTab({ templates, reload, isAdmin }) {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+/* ─────────────────────────── LABELS (barcode printing) ─────────────────────────── */
+function printLabels(w, h, items, barcodes) {
+  const imgH = Math.max(8, +(h * 0.52).toFixed(1));
+  const labels = items.map(it => `
+    <div class="lbl">
+      <img src="${barcodes[it.code] || ""}" alt="" />
+      <div class="code">${it.code}</div>
+      ${it.line2 ? `<div class="sub">${it.line2}</div>` : ""}
+    </div>`).join("");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Labels</title>
+    <style>
+      @page { size: ${w}mm ${h}mm; margin: 0; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      .lbl { width: ${w}mm; height: ${h}mm; page-break-after: always; overflow: hidden;
+             display: flex; flex-direction: column; align-items: center; justify-content: center;
+             padding: 1mm; font-family: Arial, sans-serif; }
+      .lbl img { width: ${(w - 6).toFixed(1)}mm; height: ${imgH}mm; object-fit: fill; image-rendering: crisp-edges; }
+      .code { font-weight: 700; font-family: monospace; font-size: 9pt; line-height: 1.1; margin-top: 0.6mm; }
+      .sub { font-size: 8pt; line-height: 1.1; }
+    </style></head><body>${labels}</body></html>`;
+  const win = window.open("", "_blank");
+  if (!win) { alert("Please allow pop-ups to print labels."); return; }
+  win.document.write(html); win.document.close(); win.focus();
+  setTimeout(() => win.print(), 400);
+}
+
+function LabelsTab({ skus, racks }) {
+  const [cfg, setCfg] = useState({ width_mm: 50, height_mm: 25 });
+  const [msg, setMsg] = useState("");
+  const [skuCopies, setSkuCopies] = useState({});   // id -> copies
+  const [rackCopies, setRackCopies] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { api.get("/warehouse/label-config").then(r => setCfg(r.data)); }, []);
+
+  const saveCfg = async () => {
+    try {
+      const { data } = await api.put("/warehouse/label-config", { width_mm: parseFloat(cfg.width_mm) || 50, height_mm: parseFloat(cfg.height_mm) || 25 });
+      setCfg(data); setMsg("✅ Default label size saved");
+      setTimeout(() => setMsg(""), 2500);
+    } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
+  };
+
+  const toggle = (map, setMap, id) => setMap(m => { const n = { ...m }; if (n[id]) delete n[id]; else n[id] = 1; return n; });
+  const setCopies = (setMap, id, v) => setMap(m => ({ ...m, [id]: Math.max(1, parseInt(v) || 1) }));
+
+  const doPrint = async (rows, copiesMap, lineKey) => {
+    const chosen = rows.filter(r => copiesMap[r.id]);
+    if (!chosen.length) { setMsg("Tick at least one row to print"); return; }
+    setBusy(true); setMsg("");
+    try {
+      const codes = [...new Set(chosen.map(r => r._code))];
+      const { data } = await api.post("/warehouse/barcodes", { codes });
+      const items = [];
+      chosen.forEach(r => {
+        const n = copiesMap[r.id] || 1;
+        for (let i = 0; i < n; i++) items.push({ code: r._code, line2: r[lineKey] || "" });
+      });
+      printLabels(parseFloat(cfg.width_mm) || 50, parseFloat(cfg.height_mm) || 25, items, data.barcodes);
+    } catch (e) { setMsg(e.response?.data?.detail || "Could not generate barcodes"); }
+    finally { setBusy(false); }
+  };
+
+  const skuRows = skus.map(s => ({ id: s.id, _code: s.sku_code, size: s.size, name: s.name }));
+  const rackRows = racks.map(r => ({ id: r.id, _code: r.code, zone: r.zone }));
+
+  return (
+    <div>
+      <div style={{ ...S.card, marginBottom: 20 }}>
+        <div style={S.header}><h3 style={S.h3}><Printer size={15} /> Label Size (Zebra roll)</h3></div>
+        <div style={{ padding: 20 }}>
+          <Msg msg={msg} />
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div style={{ width: 130 }}><label style={S.label}>Width (mm)</label><input style={S.input} type="number" step="0.1" min="1" value={cfg.width_mm} onChange={e => setCfg(c => ({ ...c, width_mm: e.target.value }))} /></div>
+            <div style={{ width: 130 }}><label style={S.label}>Height (mm)</label><input style={S.input} type="number" step="0.1" min="1" value={cfg.height_mm} onChange={e => setCfg(c => ({ ...c, height_mm: e.target.value }))} /></div>
+            <button onClick={saveCfg} style={{ ...S.btn }}>Save as default</button>
+          </div>
+          <div style={{ fontSize: 12, color: "#adb5bd", marginTop: 10 }}>Common Zebra sizes: 50×25, 38×25, 40×30 mm. In the print dialog pick your Zebra printer and set margins to None. Each label prints on its own.</div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+        <div style={S.card}>
+          <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={S.h3}><Layers size={15} /> SKU Labels</h3>
+            <button onClick={() => doPrint(skuRows, skuCopies, "size")} disabled={busy} style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}><Printer size={13} /> {busy ? "..." : "Print"}</button>
+          </div>
+          {skuRows.length === 0 ? <div style={{ textAlign: "center", padding: 40, color: "#adb5bd", fontSize: 14 }}>No SKUs yet</div> : (
+            <div style={{ maxHeight: 460, overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ background: "#f8f9fc" }}>{["", "SKU", "Size", "Copies"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {skuRows.map((r, i) => (
+                    <tr key={r.id} style={{ borderTop: "1px solid #f0f0f0", background: skuCopies[r.id] ? "#eef2ff" : (i % 2 ? "#fafafa" : "white") }}>
+                      <td style={{ ...S.td, width: 28 }}><input type="checkbox" checked={!!skuCopies[r.id]} onChange={() => toggle(skuCopies, setSkuCopies, r.id)} /></td>
+                      <td style={S.td}><span style={{ fontFamily: "monospace", fontWeight: 700 }}>{r._code}</span></td>
+                      <td style={S.td}>{r.size || "—"}</td>
+                      <td style={{ ...S.td, width: 80 }}><input style={{ ...S.input, padding: "5px 8px", width: 64 }} type="number" min="1" disabled={!skuCopies[r.id]} value={skuCopies[r.id] || 1} onChange={e => setCopies(setSkuCopies, r.id, e.target.value)} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div style={S.card}>
+          <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={S.h3}><MapPin size={15} /> Rack Labels</h3>
+            <button onClick={() => doPrint(rackRows, rackCopies, "zone")} disabled={busy} style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}><Printer size={13} /> {busy ? "..." : "Print"}</button>
+          </div>
+          {rackRows.length === 0 ? <div style={{ textAlign: "center", padding: 40, color: "#adb5bd", fontSize: 14 }}>No racks yet</div> : (
+            <div style={{ maxHeight: 460, overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ background: "#f8f9fc" }}>{["", "Rack", "Zone", "Copies"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {rackRows.map((r, i) => (
+                    <tr key={r.id} style={{ borderTop: "1px solid #f0f0f0", background: rackCopies[r.id] ? "#eef2ff" : (i % 2 ? "#fafafa" : "white") }}>
+                      <td style={{ ...S.td, width: 28 }}><input type="checkbox" checked={!!rackCopies[r.id]} onChange={() => toggle(rackCopies, setRackCopies, r.id)} /></td>
+                      <td style={S.td}><span style={{ fontWeight: 700 }}>{r._code}</span></td>
+                      <td style={S.td}>{r.zone || "—"}</td>
+                      <td style={{ ...S.td, width: 80 }}><input style={{ ...S.input, padding: "5px 8px", width: 64 }} type="number" min="1" disabled={!rackCopies[r.id]} value={rackCopies[r.id] || 1} onChange={e => setCopies(setRackCopies, r.id, e.target.value)} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -345,3 +345,12 @@ class WarehouseUploadBatch(Base):
     unmatched_json = Column(Text)             # list of {code, qty}
     created_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AppSetting(Base):
+    """Simple key/value store for app-wide settings (e.g. default label size)."""
+    __tablename__ = "app_settings"
+    id = Column(Integer, primary_key=True)
+    key = Column(String(80), unique=True, index=True, nullable=False)
+    value = Column(Text)
+    updated_at = Column(DateTime, default=datetime.utcnow)
