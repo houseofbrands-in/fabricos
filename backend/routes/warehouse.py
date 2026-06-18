@@ -507,6 +507,48 @@ async def inward_bulk(file: UploadFile = File(...), db: Session = Depends(get_db
             "total": len(rows), "skipped": skipped}
 
 
+class PickIn(BaseModel):
+    rack_code: str
+    sku_code: str
+    qty: int = 1
+    reference: Optional[str] = ""
+
+
+@router.post("/pick")
+def pick_scan(body: PickIn, db: Session = Depends(get_db),
+              current_user: User = Depends(wh_admin)):
+    """Live scan-picking: scan a rack, then scan items pulled from it. Deducts from
+    that exact rack in real time. Refuses to pull more than the rack physically holds."""
+    if body.qty <= 0:
+        raise HTTPException(400, "Quantity must be at least 1")
+    rn = norm(body.rack_code)
+    rack = db.query(WarehouseRack).filter(WarehouseRack.normalized_code == rn).first()
+    if not rack:
+        rack = db.query(WarehouseRack).filter(WarehouseRack.barcode == body.rack_code.strip()).first()
+    if not rack:
+        raise HTTPException(404, f"Rack '{body.rack_code}' not found")
+    master = resolve_master(db, body.sku_code)
+    if not master:
+        raise HTTPException(404, f"'{body.sku_code}' is not in the SKU master")
+    on_rack = int(db.query(func.coalesce(func.sum(WarehouseMovement.qty), 0))
+                  .filter(WarehouseMovement.master_id == master.id,
+                          WarehouseMovement.rack_id == rack.id,
+                          WarehouseMovement.bucket == "sellable").scalar() or 0)
+    if body.qty > on_rack:
+        raise HTTPException(400, f"Only {on_rack} of {master.sku_code} on rack {rack.code}")
+    db.add(WarehouseMovement(
+        master_id=master.id, rack_id=rack.id, bucket="sellable", qty=-body.qty,
+        move_type="outward", source="scan", reference=(body.reference or "").strip() or f"Rack {rack.code}",
+        created_by=current_user.id))
+    db.commit()
+    return {
+        "ok": True, "sku_code": master.sku_code, "name": master.name,
+        "rack_code": rack.code, "picked": body.qty,
+        "rack_qty_now": on_rack - body.qty,
+        "sellable_total_now": sellable_total(db, master.id),
+    }
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  STOCK + MOVEMENTS
 # ════════════════════════════════════════════════════════════════════════════

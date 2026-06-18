@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
 import { useAuth } from "../context/AuthContext";
-import { Boxes, Plus, Layers, ScanLine, Trash2, X, MapPin, PackagePlus, Upload, RotateCcw, AlertTriangle, SlidersHorizontal, Printer } from "lucide-react";
+import { Boxes, Plus, Layers, ScanLine, Trash2, X, MapPin, PackagePlus, Upload, RotateCcw, AlertTriangle, SlidersHorizontal, Printer, PackageMinus } from "lucide-react";
 
 const S = {
   card: { background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" },
@@ -55,6 +55,7 @@ export default function Warehouse() {
   const tabs = [
     ["inward", "Inward", ScanLine],
     ["outward", "Outward", Upload],
+    ["pick", "Scan Pick", PackageMinus],
     ["returns", "Returns", RotateCcw],
     ["quarantine", "Quarantine", AlertTriangle],
     ["stock", "Stock", Boxes],
@@ -93,6 +94,7 @@ export default function Warehouse() {
 
       {tab === "inward" && <InwardTab racks={racks} reload={loadAll} />}
       {tab === "outward" && <OutwardTab templates={templates} reload={loadAll} />}
+      {tab === "pick" && <PickTab racks={racks} reload={loadAll} />}
       {tab === "returns" && <ReturnsTab templates={templates} reload={loadAll} />}
       {tab === "quarantine" && <QuarantineTab quarantine={quarantine} reload={loadAll} />}
       {tab === "stock" && <StockTab stock={stock} />}
@@ -1106,6 +1108,115 @@ function LabelsTab({ skus, racks }) {
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+/* ─────────────────────────── SCAN PICK (live outward) ─────────────────────────── */
+function PickTab({ racks, reload }) {
+  const [rack, setRack] = useState(null);
+  const [rackInput, setRackInput] = useState("");
+  const [reference, setReference] = useState("");
+  const [skuInput, setSkuInput] = useState("");
+  const [qty, setQty] = useState(1);
+  const [msg, setMsg] = useState("");
+  const [log, setLog] = useState([]);
+  const skuRef = useRef(null);
+  const rackRef = useRef(null);
+
+  const lockRack = () => {
+    const v = rackInput.trim();
+    if (!v) return;
+    const found = racks.find(r => normCode(r.code) === normCode(v) || (r.barcode && r.barcode === v));
+    if (!found) { setMsg(`Rack '${v}' not found.`); return; }
+    setRack(found); setMsg(""); setRackInput("");
+    setTimeout(() => skuRef.current?.focus(), 50);
+  };
+
+  const scanPick = async () => {
+    const code = skuInput.trim();
+    if (!code || !rack) return;
+    try {
+      const { data } = await api.post("/warehouse/pick", { rack_code: rack.code, sku_code: code, qty: parseInt(qty) || 1, reference });
+      setLog(l => [{ sku: data.sku_code, name: data.name, picked: data.picked, rack: data.rack_code, rackNow: data.rack_qty_now, total: data.sellable_total_now }, ...l].slice(0, 14));
+      setMsg(""); setSkuInput(""); setQty(1);
+      setTimeout(() => skuRef.current?.focus(), 30);
+      reload();
+    } catch (e) {
+      setMsg(e.response?.data?.detail || "Error");
+      setSkuInput("");
+      setTimeout(() => skuRef.current?.focus(), 30);
+    }
+  };
+
+  const picked = log.reduce((s, r) => s + r.picked, 0);
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(320px,440px) 1fr", gap: 20, alignItems: "start" }}>
+      <div style={S.card}>
+        <div style={S.header}><h3 style={S.h3}><PackageMinus size={15} /> Scan Pick — Pull from Rack</h3></div>
+        <div style={{ padding: 20 }}>
+          <Msg msg={msg} />
+          {!rack ? (
+            <div>
+              <label style={S.label}>Step 1 — Scan / type Rack</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input ref={rackRef} autoFocus style={{ ...S.input, fontSize: 18, fontWeight: 700 }} placeholder="Scan rack barcode…"
+                  value={rackInput} onChange={e => setRackInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); lockRack(); } }} />
+                <button onClick={lockRack} style={{ ...S.btn }}>Set</button>
+              </div>
+              <div style={{ fontSize: 12, color: "#adb5bd", marginTop: 8 }}>Use this for ad-hoc / FOB dispatch — scan the rack, then scan each item you pull out.</div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fdecea", borderRadius: 10, padding: "10px 14px", marginBottom: 14 }}>
+                <div><MapPin size={14} style={{ verticalAlign: -2 }} /> <b>Rack {rack.code}</b>{rack.zone ? <span style={{ color: "#6c757d" }}> · {rack.zone}</span> : null}</div>
+                <button onClick={() => { setRack(null); setLog([]); setTimeout(() => rackRef.current?.focus(), 50); }} style={{ background: "none", border: "none", color: "#e94560", cursor: "pointer", fontWeight: 700, fontSize: 12 }}>Change rack</button>
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <label style={S.label}>Order / reference (optional)</label>
+                <input style={S.input} placeholder="e.g. FOB order, customer, invoice…" value={reference} onChange={e => setReference(e.target.value)} />
+              </div>
+              <label style={S.label}>Scan / type SKU being pulled</label>
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <input ref={skuRef} autoFocus style={{ ...S.input, fontSize: 18, fontWeight: 700 }} placeholder="Scan SKU…"
+                  value={skuInput} onChange={e => setSkuInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); scanPick(); } }} />
+                <input style={{ ...S.input, width: 80, fontSize: 18, fontWeight: 700, textAlign: "center" }} type="number" min="1" value={qty} onChange={e => setQty(e.target.value)} />
+              </div>
+              <button onClick={scanPick} style={{ ...S.btn, width: "100%", background: "#e94560" }}><PackageMinus size={15} style={{ verticalAlign: -3 }} /> Pull from {rack.code}</button>
+              <div style={{ fontSize: 12, color: "#adb5bd", marginTop: 8 }}>Each scan removes the quantity shown (default 1) from this rack and refocuses for the next scan. Won't let you pull more than the rack holds.</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={S.card}>
+        <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h3 style={S.h3}><PackageMinus size={15} /> Just Picked</h3>
+          {picked > 0 && <span style={{ fontSize: 13, fontWeight: 700 }}>{picked} unit{picked > 1 ? "s" : ""}</span>}
+        </div>
+        {log.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>Picked items will appear here</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ background: "#f8f9fc" }}>{["SKU", "Rack", "Pulled", "Rack now", "Total now"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {log.map((r, i) => (
+                  <tr key={i} style={{ borderTop: "1px solid #f0f0f0" }}>
+                    <td style={S.td}><span style={{ fontFamily: "monospace", fontWeight: 700 }}>{r.sku}</span>{r.name ? <div style={{ fontSize: 11, color: "#adb5bd" }}>{r.name}</div> : null}</td>
+                    <td style={S.td}>{r.rack}</td>
+                    <td style={S.td}><span style={S.pill("#fdecea", "#b71c1c")}>−{r.picked}</span></td>
+                    <td style={S.td}>{r.rackNow}</td>
+                    <td style={{ ...S.td, fontWeight: 700 }}>{r.total}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
