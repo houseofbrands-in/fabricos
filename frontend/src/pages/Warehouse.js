@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
 import { useAuth } from "../context/AuthContext";
-import { Boxes, Plus, Layers, ScanLine, Trash2, X, MapPin, PackagePlus, Upload, RotateCcw, AlertTriangle, SlidersHorizontal, Printer, PackageMinus } from "lucide-react";
+import { Boxes, Plus, Layers, ScanLine, Trash2, X, MapPin, PackagePlus, Upload, RotateCcw, AlertTriangle, SlidersHorizontal, Printer, PackageMinus, Factory } from "lucide-react";
 
 const S = {
   card: { background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" },
@@ -43,17 +43,20 @@ export default function Warehouse() {
   const [stock, setStock] = useState({ skus: [], total_units: 0, total_quarantine: 0 });
   const [templates, setTemplates] = useState([]);
   const [quarantine, setQuarantine] = useState([]);
+  const [production, setProduction] = useState([]);
 
   const loadSkus = () => api.get("/warehouse/skus").then(r => setSkus(r.data));
   const loadRacks = () => api.get("/warehouse/racks").then(r => setRacks(r.data));
   const loadStock = () => api.get("/warehouse/stock").then(r => setStock(r.data));
   const loadTemplates = () => api.get("/warehouse/templates").then(r => setTemplates(r.data));
   const loadQuarantine = () => api.get("/warehouse/quarantine").then(r => setQuarantine(r.data));
-  const loadAll = () => { loadSkus(); loadRacks(); loadStock(); loadTemplates(); loadQuarantine(); };
+  const loadProduction = () => api.get("/warehouse/production/pending").then(r => setProduction(r.data));
+  const loadAll = () => { loadSkus(); loadRacks(); loadStock(); loadTemplates(); loadQuarantine(); loadProduction(); };
   useEffect(loadAll, []);
 
   const tabs = [
     ["inward", "Inward", ScanLine],
+    ["production", "From Production", Factory],
     ["outward", "Outward", Upload],
     ["pick", "Scan Pick", PackageMinus],
     ["returns", "Returns", RotateCcw],
@@ -88,11 +91,16 @@ export default function Warehouse() {
             background: tab === key ? "#1a1a2e" : "transparent", color: tab === key ? "white" : "#6c757d",
             border: "none", borderRadius: 9, padding: "8px 16px", fontWeight: 700, fontSize: 13, cursor: "pointer",
             display: "flex", alignItems: "center", gap: 6,
-          }}><Icon size={14} /> {label}</button>
+          }}><Icon size={14} /> {label}
+            {key === "production" && production.length > 0 && (
+              <span style={{ background: "#e94560", color: "white", borderRadius: 10, fontSize: 11, fontWeight: 800, padding: "0 7px", marginLeft: 2 }}>{production.length}</span>
+            )}
+          </button>
         ))}
       </div>
 
       {tab === "inward" && <InwardTab racks={racks} reload={loadAll} />}
+      {tab === "production" && <ProductionTab pending={production} skus={skus} reload={loadAll} />}
       {tab === "outward" && <OutwardTab templates={templates} reload={loadAll} />}
       {tab === "pick" && <PickTab racks={racks} reload={loadAll} />}
       {tab === "returns" && <ReturnsTab templates={templates} reload={loadAll} />}
@@ -1218,6 +1226,118 @@ function PickTab({ racks, reload }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+/* ─────────────────────────── FROM PRODUCTION (auto-inward) ─────────────────────────── */
+function ProductionTab({ pending, skus, reload }) {
+  const [state, setState] = useState({});   // packing_id -> { rack, lines: {size:{master_id,qty}} }
+  const [msg, setMsg] = useState("");
+  const [busyId, setBusyId] = useState(null);
+
+  useEffect(() => {
+    setState(prev => {
+      const next = { ...prev };
+      pending.forEach(p => {
+        if (!next[p.packing_id]) {
+          const lines = {};
+          p.lines.forEach(l => { lines[l.size] = { master_id: l.suggested_master_id || "", qty: l.qty }; });
+          next[p.packing_id] = { rack: "", lines };
+        }
+      });
+      Object.keys(next).forEach(k => { if (!pending.find(p => String(p.packing_id) === String(k))) delete next[k]; });
+      return next;
+    });
+  }, [pending]);
+
+  const setRack = (pid, v) => setState(s => ({ ...s, [pid]: { ...s[pid], rack: v } }));
+  const setLine = (pid, size, field, v) => setState(s => ({ ...s, [pid]: { ...s[pid], lines: { ...s[pid].lines, [size]: { ...s[pid].lines[size], [field]: v } } } }));
+
+  const optionsForSize = (size) => {
+    const want = (size || "").toUpperCase();
+    const matched = skus.filter(s => (s.size || "").toUpperCase() === want);
+    return matched.length ? matched : skus;
+  };
+
+  const takeIn = async (p) => {
+    const st = state[p.packing_id];
+    if (!st) return;
+    if (!st.rack || !st.rack.trim()) { setMsg(`Scan / type a rack for ${p.bundle_code}`); return; }
+    const lines = Object.entries(st.lines)
+      .map(([size, v]) => ({ size, master_id: parseInt(v.master_id) || 0, qty: parseInt(v.qty) || 0 }))
+      .filter(l => l.qty > 0);
+    if (!lines.length) { setMsg("Nothing to take in"); return; }
+    if (lines.some(l => !l.master_id)) { setMsg("Pick a SKU for every size first"); return; }
+    setBusyId(p.packing_id); setMsg("");
+    try {
+      await api.post("/warehouse/production/inward", { packing_id: p.packing_id, rack_code: st.rack, lines });
+      reload();
+    } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
+    finally { setBusyId(null); }
+  };
+
+  if (!pending.length) {
+    return (
+      <div style={S.card}>
+        <div style={S.header}><h3 style={S.h3}><Factory size={15} /> From Production</h3></div>
+        <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No packed bundles waiting to come into stock. Packed bundles from the floor will show up here.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <Msg msg={msg} />
+      <p style={{ color: "#6c757d", fontSize: 13, marginTop: 0, marginBottom: 16 }}>
+        These bundles were packed on the floor. Confirm the SKU for each size (auto-suggested), scan a rack, and take them into stock. Your SKU choice is remembered for next time.
+      </p>
+      {pending.map(p => {
+        const st = state[p.packing_id] || { rack: "", lines: {} };
+        return (
+          <div key={p.packing_id} style={{ ...S.card, marginBottom: 16 }}>
+            <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <h3 style={S.h3}><Factory size={15} /> {p.design_code}{p.design_name ? ` · ${p.design_name}` : ""}</h3>
+              <span style={{ fontSize: 12, opacity: 0.9 }}>Bundle {p.bundle_code} · {p.total_qty} pcs{p.carton_no ? ` · carton ${p.carton_no}` : ""}</span>
+            </div>
+            <div style={{ padding: 16 }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 14 }}>
+                <div style={{ flex: "1 1 220px" }}>
+                  <label style={S.label}>Scan / type rack to place stock</label>
+                  <input style={S.input} value={st.rack || ""} onChange={e => setRack(p.packing_id, e.target.value)} placeholder="e.g. A1" />
+                </div>
+                <button onClick={() => takeIn(p)} disabled={busyId === p.packing_id} style={{ ...S.btn, background: "#1b5e20", opacity: busyId === p.packing_id ? 0.7 : 1 }}>
+                  {busyId === p.packing_id ? "Taking in..." : "Take into stock"}
+                </button>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr style={{ background: "#f8f9fc" }}>{["Size", "Qty", "Warehouse SKU (confirm / change)"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {p.lines.map(l => {
+                      const ln = st.lines[l.size] || { master_id: "", qty: l.qty };
+                      const opts = optionsForSize(l.size);
+                      const noSuggestion = !l.suggested_master_id;
+                      return (
+                        <tr key={l.size} style={{ borderTop: "1px solid #f0f0f0" }}>
+                          <td style={S.td}><span style={S.pill("#e8eaf6", "#283593")}>{l.size}</span></td>
+                          <td style={{ ...S.td, width: 90 }}><input style={{ ...S.input, padding: "5px 8px", width: 70 }} type="number" min="0" value={ln.qty} onChange={e => setLine(p.packing_id, l.size, "qty", e.target.value)} /></td>
+                          <td style={S.td}>
+                            <select style={{ ...S.input, padding: "7px 8px", borderColor: ln.master_id ? "#dee2e6" : "#e94560" }} value={ln.master_id} onChange={e => setLine(p.packing_id, l.size, "master_id", e.target.value)}>
+                              <option value="">— pick SKU —</option>
+                              {opts.map(s => <option key={s.id} value={s.id}>{s.sku_code}{s.name ? ` · ${s.name}` : ""}</option>)}
+                            </select>
+                            {noSuggestion && <div style={{ fontSize: 11, color: "#e94560", marginTop: 3 }}>No auto-match — pick once and it'll be remembered.</div>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
