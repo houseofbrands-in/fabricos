@@ -273,17 +273,30 @@ function InwardTab({ racks, reload }) {
 
 /* ─────────────────────────── STOCK ─────────────────────────── */
 function StockTab({ stock }) {
+  const [q, setQ] = useState("");
+  const ql = q.trim().toLowerCase();
+  const rows = !ql ? stock.skus : stock.skus.filter(s =>
+    (s.sku_code || "").toLowerCase().includes(ql) ||
+    (s.name || "").toLowerCase().includes(ql) ||
+    (s.size || "").toLowerCase().includes(ql) ||
+    (s.racks || []).some(r => (r.rack_code || "").toLowerCase().includes(ql))
+  );
   return (
     <div style={S.card}>
-      <div style={S.header}><h3 style={S.h3}><Boxes size={15} /> Live Stock ({stock.skus.length} SKUs)</h3></div>
+      <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <h3 style={S.h3}><Boxes size={15} /> Live Stock ({rows.length}{ql ? ` of ${stock.skus.length}` : ""} SKUs)</h3>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search SKU, name, size, rack…" style={{ border: "none", borderRadius: 8, padding: "7px 12px", fontSize: 13, width: 240, maxWidth: "100%", outline: "none" }} />
+      </div>
       {stock.skus.length === 0 ? (
         <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No stock yet — add SKUs and inward them</div>
+      ) : rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No stock matches "{q}"</div>
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr style={{ background: "#f8f9fc" }}>{["SKU", "Size", "Sellable", "Quarantine", "On racks"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
             <tbody>
-              {stock.skus.map((s, i) => (
+              {rows.map((s, i) => (
                 <tr key={s.id} style={{ borderTop: "1px solid #f0f0f0", background: i % 2 ? "#fafafa" : "white" }}>
                   <td style={S.td}><span style={{ fontFamily: "monospace", fontWeight: 700 }}>{s.sku_code}</span>{s.name ? <div style={{ fontSize: 11, color: "#adb5bd" }}>{s.name}</div> : null}</td>
                   <td style={S.td}>{s.size || "—"}</td>
@@ -307,6 +320,15 @@ function SkusTab({ skus, reload, isAdmin }) {
   const [loading, setLoading] = useState(false);
   const [subFor, setSubFor] = useState(null);
   const [sub, setSub] = useState({ sub_code: "", channel: "", barcode: "" });
+  const [q, setQ] = useState("");
+
+  const ql = q.trim().toLowerCase();
+  const filtered = !ql ? skus : skus.filter(s =>
+    (s.sku_code || "").toLowerCase().includes(ql) ||
+    (s.name || "").toLowerCase().includes(ql) ||
+    (s.size || "").toLowerCase().includes(ql) ||
+    (s.subs || []).some(x => (x.sub_code || "").toLowerCase().includes(ql) || (x.channel || "").toLowerCase().includes(ql))
+  );
 
   const submit = async (e) => {
     e.preventDefault(); setLoading(true); setMsg("");
@@ -464,12 +486,17 @@ function SkusTab({ skus, reload, isAdmin }) {
       </div>
 
       <div style={S.card}>
-        <div style={S.header}><h3 style={S.h3}><Layers size={15} /> Master SKUs ({skus.length})</h3></div>
+        <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <h3 style={S.h3}><Layers size={15} /> Master SKUs ({filtered.length}{ql ? ` of ${skus.length}` : ""})</h3>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search SKU, name, size, sub-SKU…" style={{ border: "none", borderRadius: 8, padding: "7px 12px", fontSize: 13, width: 240, maxWidth: "100%", outline: "none" }} />
+        </div>
         {skus.length === 0 ? (
           <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No SKUs yet</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No SKUs match "{q}"</div>
         ) : (
           <div style={{ padding: 12 }}>
-            {skus.map(s => (
+            {filtered.map(s => (
               <div key={s.id} style={{ border: "1px solid #f0f0f0", borderRadius: 12, padding: 14, marginBottom: 12 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                   <div>
@@ -522,6 +549,12 @@ function RacksTab({ racks, reload, isAdmin }) {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [contents, setContents] = useState(null);
+  const [q, setQ] = useState("");
+
+  const ql = q.trim().toLowerCase();
+  const filtered = !ql ? racks : racks.filter(r =>
+    (r.code || "").toLowerCase().includes(ql) || (r.zone || "").toLowerCase().includes(ql)
+  );
 
   const submit = async (e) => {
     e.preventDefault(); setLoading(true); setMsg("");
@@ -562,15 +595,20 @@ function RacksTab({ racks, reload, isAdmin }) {
       </div>
 
       <div style={S.card}>
-        <div style={S.header}><h3 style={S.h3}><MapPin size={15} /> Racks ({racks.length})</h3></div>
+        <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <h3 style={S.h3}><MapPin size={15} /> Racks ({filtered.length}{ql ? ` of ${racks.length}` : ""})</h3>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search rack or zone…" style={{ border: "none", borderRadius: 8, padding: "7px 12px", fontSize: 13, width: 220, maxWidth: "100%", outline: "none" }} />
+        </div>
         {racks.length === 0 ? (
           <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No racks yet</div>
+        ) : filtered.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No racks match "{q}"</div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr style={{ background: "#f8f9fc" }}>{["Rack", "Zone", "SKUs", "Units", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
               <tbody>
-                {racks.map((r, i) => (
+                {filtered.map((r, i) => (
                   <tr key={r.id} style={{ borderTop: "1px solid #f0f0f0", background: i % 2 ? "#fafafa" : "white" }}>
                     <td style={S.td}><span style={{ fontWeight: 700 }}>{r.code}</span>{r.barcode ? <div style={{ fontSize: 11, color: "#adb5bd" }}>{r.barcode}</div> : null}</td>
                     <td style={S.td}>{r.zone || "—"}</td>
