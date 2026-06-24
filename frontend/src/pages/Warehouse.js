@@ -34,6 +34,37 @@ async function doDelete(url, reload) {
 
 const normCode = (s) => (s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 
+const pgBtn = (disabled) => ({ background: disabled ? "#f1f3f5" : "#283593", color: disabled ? "#adb5bd" : "white", border: "none", borderRadius: 8, padding: "6px 12px", fontWeight: 700, fontSize: 13, cursor: disabled ? "default" : "pointer" });
+
+function Pager({ total, page, pageSize, setPage, setPageSize }) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const cur = Math.min(page, pages);
+  const from = total === 0 ? 0 : (cur - 1) * pageSize + 1;
+  const to = Math.min(total, cur * pageSize);
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "12px 16px", borderTop: "1px solid #f0f0f0", fontSize: 13 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#6c757d" }}>
+        <span>Rows per page</span>
+        <select value={pageSize} onChange={e => { setPageSize(parseInt(e.target.value)); setPage(1); }} style={{ border: "1px solid #dee2e6", borderRadius: 8, padding: "5px 8px", fontSize: 13 }}>
+          {[100, 200, 300].map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ color: "#6c757d" }}>{from}–{to} of {total}</span>
+        <button disabled={cur <= 1} onClick={() => setPage(cur - 1)} style={pgBtn(cur <= 1)}>Prev</button>
+        <span style={{ fontWeight: 700 }}>{cur}/{pages}</span>
+        <button disabled={cur >= pages} onClick={() => setPage(cur + 1)} style={pgBtn(cur >= pages)}>Next</button>
+      </div>
+    </div>
+  );
+}
+
+const pageSlice = (arr, page, size) => {
+  const pages = Math.max(1, Math.ceil(arr.length / size));
+  const cur = Math.min(page, pages);
+  return arr.slice((cur - 1) * size, cur * size);
+};
+
 export default function Warehouse() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -274,6 +305,8 @@ function InwardTab({ racks, reload }) {
 /* ─────────────────────────── STOCK ─────────────────────────── */
 function StockTab({ stock }) {
   const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const ql = q.trim().toLowerCase();
   const rows = !ql ? stock.skus : stock.skus.filter(s =>
     (s.sku_code || "").toLowerCase().includes(ql) ||
@@ -281,6 +314,8 @@ function StockTab({ stock }) {
     (s.size || "").toLowerCase().includes(ql) ||
     (s.racks || []).some(r => (r.rack_code || "").toLowerCase().includes(ql))
   );
+  useEffect(() => setPage(1), [ql]);
+  const paged = pageSlice(rows, page, pageSize);
   return (
     <div style={S.card}>
       <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -296,7 +331,7 @@ function StockTab({ stock }) {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr style={{ background: "#f8f9fc" }}>{["SKU", "Size", "Sellable", "Quarantine", "On racks"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
             <tbody>
-              {rows.map((s, i) => (
+              {paged.map((s, i) => (
                 <tr key={s.id} style={{ borderTop: "1px solid #f0f0f0", background: i % 2 ? "#fafafa" : "white" }}>
                   <td style={S.td}><span style={{ fontFamily: "monospace", fontWeight: 700 }}>{s.sku_code}</span>{s.name ? <div style={{ fontSize: 11, color: "#adb5bd" }}>{s.name}</div> : null}</td>
                   <td style={S.td}>{s.size || "—"}</td>
@@ -307,6 +342,7 @@ function StockTab({ stock }) {
               ))}
             </tbody>
           </table>
+          <Pager total={rows.length} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} />
         </div>
       )}
     </div>
@@ -321,6 +357,8 @@ function SkusTab({ skus, reload, isAdmin }) {
   const [subFor, setSubFor] = useState(null);
   const [sub, setSub] = useState({ sub_code: "", channel: "", barcode: "" });
   const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
 
   const ql = q.trim().toLowerCase();
   const filtered = !ql ? skus : skus.filter(s =>
@@ -329,6 +367,8 @@ function SkusTab({ skus, reload, isAdmin }) {
     (s.size || "").toLowerCase().includes(ql) ||
     (s.subs || []).some(x => (x.sub_code || "").toLowerCase().includes(ql) || (x.channel || "").toLowerCase().includes(ql))
   );
+  useEffect(() => setPage(1), [ql]);
+  const paged = pageSlice(filtered, page, pageSize);
 
   const submit = async (e) => {
     e.preventDefault(); setLoading(true); setMsg("");
@@ -496,7 +536,7 @@ function SkusTab({ skus, reload, isAdmin }) {
           <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No SKUs match "{q}"</div>
         ) : (
           <div style={{ padding: 12 }}>
-            {filtered.map(s => (
+            {paged.map(s => (
               <div key={s.id} style={{ border: "1px solid #f0f0f0", borderRadius: 12, padding: 14, marginBottom: 12 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                   <div>
@@ -536,6 +576,7 @@ function SkusTab({ skus, reload, isAdmin }) {
                 )}
               </div>
             ))}
+            <Pager total={filtered.length} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} />
           </div>
         )}
       </div>
@@ -550,11 +591,15 @@ function RacksTab({ racks, reload, isAdmin }) {
   const [loading, setLoading] = useState(false);
   const [contents, setContents] = useState(null);
   const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
 
   const ql = q.trim().toLowerCase();
   const filtered = !ql ? racks : racks.filter(r =>
     (r.code || "").toLowerCase().includes(ql) || (r.zone || "").toLowerCase().includes(ql)
   );
+  useEffect(() => setPage(1), [ql]);
+  const paged = pageSlice(filtered, page, pageSize);
 
   const submit = async (e) => {
     e.preventDefault(); setLoading(true); setMsg("");
@@ -608,7 +653,7 @@ function RacksTab({ racks, reload, isAdmin }) {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr style={{ background: "#f8f9fc" }}>{["Rack", "Zone", "SKUs", "Units", ""].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
               <tbody>
-                {filtered.map((r, i) => (
+                {paged.map((r, i) => (
                   <tr key={r.id} style={{ borderTop: "1px solid #f0f0f0", background: i % 2 ? "#fafafa" : "white" }}>
                     <td style={S.td}><span style={{ fontWeight: 700 }}>{r.code}</span>{r.barcode ? <div style={{ fontSize: 11, color: "#adb5bd" }}>{r.barcode}</div> : null}</td>
                     <td style={S.td}>{r.zone || "—"}</td>
@@ -624,6 +669,7 @@ function RacksTab({ racks, reload, isAdmin }) {
                 ))}
               </tbody>
             </table>
+            <Pager total={filtered.length} page={page} pageSize={pageSize} setPage={setPage} setPageSize={setPageSize} />
           </div>
         )}
       </div>
@@ -1090,6 +1136,12 @@ function LabelsTab({ skus, racks }) {
 
   const skuRows = skus.map(s => ({ id: s.id, _code: s.sku_code, size: s.size, name: s.name }));
   const rackRows = racks.map(r => ({ id: r.id, _code: r.code, zone: r.zone }));
+  const [skuPage, setSkuPage] = useState(1);
+  const [skuPageSize, setSkuPageSize] = useState(100);
+  const [rackPage, setRackPage] = useState(1);
+  const [rackPageSize, setRackPageSize] = useState(100);
+  const skuPaged = pageSlice(skuRows, skuPage, skuPageSize);
+  const rackPaged = pageSlice(rackRows, rackPage, rackPageSize);
 
   return (
     <div>
@@ -1117,7 +1169,7 @@ function LabelsTab({ skus, racks }) {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr style={{ background: "#f8f9fc" }}>{["", "SKU", "Size", "Copies"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {skuRows.map((r, i) => (
+                  {skuPaged.map((r, i) => (
                     <tr key={r.id} style={{ borderTop: "1px solid #f0f0f0", background: skuCopies[r.id] ? "#eef2ff" : (i % 2 ? "#fafafa" : "white") }}>
                       <td style={{ ...S.td, width: 28 }}><input type="checkbox" checked={!!skuCopies[r.id]} onChange={() => toggle(skuCopies, setSkuCopies, r.id)} /></td>
                       <td style={S.td}><span style={{ fontFamily: "monospace", fontWeight: 700 }}>{r._code}</span></td>
@@ -1127,6 +1179,7 @@ function LabelsTab({ skus, racks }) {
                   ))}
                 </tbody>
               </table>
+              <Pager total={skuRows.length} page={skuPage} pageSize={skuPageSize} setPage={setSkuPage} setPageSize={setSkuPageSize} />
             </div>
           )}
         </div>
@@ -1141,7 +1194,7 @@ function LabelsTab({ skus, racks }) {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr style={{ background: "#f8f9fc" }}>{["", "Rack", "Zone", "Copies"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {rackRows.map((r, i) => (
+                  {rackPaged.map((r, i) => (
                     <tr key={r.id} style={{ borderTop: "1px solid #f0f0f0", background: rackCopies[r.id] ? "#eef2ff" : (i % 2 ? "#fafafa" : "white") }}>
                       <td style={{ ...S.td, width: 28 }}><input type="checkbox" checked={!!rackCopies[r.id]} onChange={() => toggle(rackCopies, setRackCopies, r.id)} /></td>
                       <td style={S.td}><span style={{ fontWeight: 700 }}>{r._code}</span></td>
@@ -1151,6 +1204,7 @@ function LabelsTab({ skus, racks }) {
                   ))}
                 </tbody>
               </table>
+              <Pager total={rackRows.length} page={rackPage} pageSize={rackPageSize} setPage={setRackPage} setPageSize={setRackPageSize} />
             </div>
           )}
         </div>
