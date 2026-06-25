@@ -354,3 +354,47 @@ class AppSetting(Base):
     key = Column(String(80), unique=True, index=True, nullable=False)
     value = Column(Text)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+# ════════════════════════════════════════════════════════════════════════════
+#  DESIGN COST SHEET  (per-piece costing + margin + version history)
+# ════════════════════════════════════════════════════════════════════════════
+class DesignCostSheet(Base):
+    """The current, editable cost sheet for a design (one per design)."""
+    __tablename__ = "design_cost_sheets"
+    id = Column(Integer, primary_key=True)
+    design_id = Column(Integer, ForeignKey("designs.id"), unique=True)
+    metres_per_piece = Column(Numeric(10, 3), default=0)
+    fabric_rate = Column(Numeric(10, 2), default=0)      # per metre
+    stitch_cost = Column(Numeric(10, 2), default=0)      # CMT / stitching per piece
+    wastage_pct = Column(Numeric(6, 2), default=0)
+    margin_pct = Column(Numeric(6, 2), default=0)        # target margin on selling price
+    selling_price = Column(Numeric(10, 2), default=0)    # actual / marketplace price (optional)
+    notes = Column(Text)
+    updated_by = Column(Integer, ForeignKey("users.id"))
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    items = relationship("DesignCostItem", cascade="all, delete-orphan")
+
+
+class DesignCostItem(Base):
+    """A line item on a cost sheet: job work, trim/accessory, or other/overhead."""
+    __tablename__ = "design_cost_items"
+    id = Column(Integer, primary_key=True)
+    cost_sheet_id = Column(Integer, ForeignKey("design_cost_sheets.id"))
+    category = Column(String(20))       # jobwork | trim | other
+    label = Column(String(120))
+    cost_per_piece = Column(Numeric(10, 2), default=0)
+
+
+class DesignCostVersion(Base):
+    """An immutable snapshot of a cost sheet, saved to history on demand."""
+    __tablename__ = "design_cost_versions"
+    id = Column(Integer, primary_key=True)
+    design_id = Column(Integer, ForeignKey("designs.id"))
+    version = Column(Integer)
+    snapshot_json = Column(Text)         # full sheet incl items + computed totals
+    total_cost = Column(Numeric(10, 2))
+    selling_price = Column(Numeric(10, 2))
+    margin_pct = Column(Numeric(6, 2))
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
