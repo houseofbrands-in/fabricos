@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { LogOut, Scissors, Package, Warehouse as WarehouseIcon } from "lucide-react";
+import { LogOut, Scissors, Package, Warehouse as WarehouseIcon, Calculator } from "lucide-react";
 
 const ROLE_COLORS = {
   admin: "#e94560",
@@ -54,6 +54,15 @@ export default function Layout({ children }) {
                 display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600,
               }}>
                 <WarehouseIcon size={13} /> Warehouse
+              </button>
+            )}
+            {(user.role === "admin" || user.role === "designer") && (
+              <button onClick={() => navigate("/quotations")} style={{
+                background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: 8, color: "white", cursor: "pointer", padding: "4px 10px",
+                display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600,
+              }}>
+                <Calculator size={13} /> Quotations
               </button>
             )}
             <span style={{ color: "rgba(255,255,255,0.6)", fontSize: 13 }}>{user.name}</span>

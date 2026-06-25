@@ -398,3 +398,49 @@ class DesignCostVersion(Base):
     margin_pct = Column(Numeric(6, 2))
     created_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
+
+# ════════════════════════════════════════════════════════════════════════════
+#  QUOTATIONS  (estimate-first costing for client work, e.g. Shein — no fabric
+#  purchased yet; built from vendor-quoted rates)
+# ════════════════════════════════════════════════════════════════════════════
+class Quotation(Base):
+    __tablename__ = "quotations"
+    id = Column(Integer, primary_key=True)
+    client_name = Column(String(120))
+    style_ref = Column(String(120))
+    quote_date = Column(DateTime, default=datetime.utcnow)
+    status = Column(String(20), default="draft")       # draft|submitted|approved|rejected
+    description = Column(String(300))
+    metres_per_piece = Column(Numeric(10, 3), default=0)
+    fabric_rate = Column(Numeric(10, 2), default=0)    # the rate being costed on
+    chosen_vendor = Column(String(120))
+    stitch_cost = Column(Numeric(10, 2), default=0)
+    wastage_pct = Column(Numeric(6, 2), default=0)
+    margin_pct = Column(Numeric(6, 2), default=0)
+    quoted_price = Column(Numeric(10, 2), default=0)   # price you'll submit (optional)
+    notes = Column(Text)
+    converted_design_id = Column(Integer, ForeignKey("designs.id"), nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    fabric_rates = relationship("QuotationFabricRate", cascade="all, delete-orphan")
+    items = relationship("QuotationItem", cascade="all, delete-orphan")
+
+
+class QuotationFabricRate(Base):
+    """A vendor's quoted fabric rate for this quotation (compare & pick)."""
+    __tablename__ = "quotation_fabric_rates"
+    id = Column(Integer, primary_key=True)
+    quotation_id = Column(Integer, ForeignKey("quotations.id"))
+    vendor_name = Column(String(120))
+    rate = Column(Numeric(10, 2), default=0)
+
+
+class QuotationItem(Base):
+    __tablename__ = "quotation_items"
+    id = Column(Integer, primary_key=True)
+    quotation_id = Column(Integer, ForeignKey("quotations.id"))
+    category = Column(String(20))       # jobwork | trim | other
+    label = Column(String(120))
+    cost_per_piece = Column(Numeric(10, 2), default=0)
