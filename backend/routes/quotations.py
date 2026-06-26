@@ -1,7 +1,9 @@
 import json
+import shutil
+from pathlib import Path
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from database import get_db
@@ -15,6 +17,7 @@ from routes.costing import compute, f
 router = APIRouter(prefix="/quotations", tags=["quotations"])
 
 editor = require_roles("designer", "admin")
+UPLOAD_DIR = Path("/tmp/fabricos_uploads")
 
 
 def quote_payload(q: Quotation):
@@ -30,6 +33,7 @@ def quote_payload(q: Quotation):
         "stitch_cost": f(q.stitch_cost), "wastage_pct": f(q.wastage_pct),
         "margin_pct": f(q.margin_pct), "quoted_price": f(q.quoted_price),
         "notes": q.notes or "",
+        "image_url": q.image_url or None,
         "fabric_rates": [{"vendor_name": r.vendor_name or "", "rate": f(r.rate)} for r in q.fabric_rates],
         "items": items,
         "converted_design_id": q.converted_design_id,
@@ -110,6 +114,7 @@ def list_quotes(db: Session = Depends(get_db), current_user: User = Depends(get_
             "total_cost": p["computed"]["total_cost"],
             "suggested_price": p["computed"]["suggested_price"],
             "quoted_price": p["quoted_price"],
+            "image_url": q.image_url or None,
             "converted": bool(q.converted_design_id),
         })
     return out
@@ -161,6 +166,37 @@ def delete_quote(qid: int, db: Session = Depends(get_db), current_user: User = D
     return {"ok": True}
 
 
+@router.post("/{qid}/image")
+def upload_image(qid: int, image: UploadFile = File(...), db: Session = Depends(get_db),
+                 current_user: User = Depends(editor)):
+    q = db.query(Quotation).get(qid)
+    if not q:
+        raise HTTPException(404, "Quotation not found")
+    if not image.filename:
+        raise HTTPException(400, "No file")
+    ext = Path(image.filename).suffix.lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+        raise HTTPException(400, "Please upload an image (jpg, png, webp)")
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    fname = f"QUOTE-{qid}{ext}"
+    with open(UPLOAD_DIR / fname, "wb") as fp:
+        shutil.copyfileobj(image.file, fp)
+    q.image_url = f"/uploads/{fname}"
+    q.updated_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "image_url": q.image_url}
+
+
+@router.delete("/{qid}/image")
+def delete_image(qid: int, db: Session = Depends(get_db), current_user: User = Depends(editor)):
+    q = db.query(Quotation).get(qid)
+    if not q:
+        raise HTTPException(404, "Quotation not found")
+    q.image_url = None
+    db.commit()
+    return {"ok": True}
+
+
 class ConvertIn(BaseModel):
     target_qty: int = 0
 
@@ -180,7 +216,7 @@ def convert_quote(qid: int, body: ConvertIn, db: Session = Depends(get_db), curr
     name = (q.description or "").strip() or (f"{q.client_name} {code}".strip()) or code
     design = Design(created_by=current_user.id, design_name=name[:200], design_code=code,
                     stitch_rate=int(round(f(q.stitch_cost))), target_qty=int(body.target_qty or 0),
-                    metres_per_piece=q.metres_per_piece)
+                    metres_per_piece=q.metres_per_piece, image_url=q.image_url)
     db.add(design)
     db.flush()
     # carry the costing over into a design cost sheet

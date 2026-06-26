@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
 import { useAuth } from "../context/AuthContext";
-import { Calculator, Plus, X, Trash2, Save, Search, FileText, ArrowRight } from "lucide-react";
+import { Calculator, Plus, X, Trash2, Save, Search, FileText, ArrowRight, Image as ImageIcon, Upload } from "lucide-react";
 
 const S = {
   card: { background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" },
@@ -67,7 +67,14 @@ export default function Quotations() {
               <tbody>
                 {filtered.map((x, i) => (
                   <tr key={x.id} style={{ borderTop: "1px solid #f0f0f0", background: i % 2 ? "#fafafa" : "white", cursor: "pointer" }} onClick={() => api.get(`/quotations/${x.id}`).then(r => setEditing(r.data))}>
-                    <td style={S.td}><b>{x.client_name || "—"}</b></td>
+                    <td style={S.td}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {x.image_url
+                          ? <img src={`${process.env.REACT_APP_API_URL || ""}${x.image_url}`} alt="" style={{ width: 34, height: 34, objectFit: "cover", borderRadius: 6, border: "1px solid #dee2e6" }} />
+                          : <div style={{ width: 34, height: 34, background: "#f0f0f0", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center" }}><ImageIcon size={14} color="#ced4da" /></div>}
+                        <b>{x.client_name || "—"}</b>
+                      </div>
+                    </td>
                     <td style={{ ...S.td, fontFamily: "monospace" }}>{x.style_ref || "—"}</td>
                     <td style={{ ...S.td, color: "#6c757d", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{x.description || "—"}</td>
                     <td style={S.td}><span style={{ background: (STATUS[x.status] || STATUS.draft)[0], color: (STATUS[x.status] || STATUS.draft)[1], borderRadius: 20, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>{x.status}</span>{x.converted && <span style={{ marginLeft: 6, fontSize: 11, color: "#1b5e20" }}>→ design</span>}</td>
@@ -92,7 +99,33 @@ function QuoteEditor({ quote, clients, onClose, onSaved }) {
   const [Q, setQ] = useState(quote);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [imgFile, setImgFile] = useState(null);       // pending local file (new quotes)
+  const [imgPreview, setImgPreview] = useState(null);
   const isNew = !Q.id;
+  const API = process.env.REACT_APP_API_URL || "";
+
+  const uploadImage = async (qid, file) => {
+    const fd = new FormData(); fd.append("image", file);
+    const { data } = await api.post(`/quotations/${qid}/image`, fd);
+    return data.image_url;
+  };
+
+  const onPickImage = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImgPreview(URL.createObjectURL(file));
+    if (Q.id) {
+      try { const url = await uploadImage(Q.id, file); setQ(s => ({ ...s, image_url: url })); setImgPreview(null); onSaved(); }
+      catch (err) { setMsg(err.response?.data?.detail || "Upload failed"); }
+    } else {
+      setImgFile(file);  // upload after the quote is created
+    }
+  };
+
+  const removeImage = async () => {
+    setImgFile(null); setImgPreview(null);
+    if (Q.id && Q.image_url) { try { await api.delete(`/quotations/${Q.id}/image`); setQ(s => ({ ...s, image_url: null })); onSaved(); } catch {} }
+  };
 
   const num = (v) => Number(v) || 0;
   const set = (k, v) => setQ(s => ({ ...s, [k]: v }));
@@ -122,7 +155,11 @@ function QuoteEditor({ quote, clients, onClose, onSaved }) {
     setBusy(true); setMsg("");
     try {
       const { data } = isNew ? await api.post("/quotations", body()) : await api.put(`/quotations/${Q.id}`, body());
-      setQ(data); onSaved();
+      let next = data;
+      if (imgFile && data.id) {
+        try { const url = await uploadImage(data.id, imgFile); next = { ...data, image_url: url }; setImgFile(null); setImgPreview(null); } catch {}
+      }
+      setQ(next); onSaved();
       if (closeAfter) onClose(); else { setMsg("✅ Saved"); setTimeout(() => setMsg(""), 2000); }
     } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
     finally { setBusy(false); }
@@ -164,6 +201,28 @@ function QuoteEditor({ quote, clients, onClose, onSaved }) {
 
           <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 24, alignItems: "start" }}>
             <div>
+              {/* product reference image */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={lab}>Product / design reference</label>
+                {(Q.image_url || imgPreview) ? (
+                  <div style={{ position: "relative", display: "inline-block" }}>
+                    <img src={imgPreview || `${API}${Q.image_url}`} alt="reference" style={{ maxWidth: "100%", maxHeight: 240, borderRadius: 10, border: "1px solid #dee2e6", display: "block" }} />
+                    <button onClick={removeImage} title="Remove image" style={{ position: "absolute", top: 6, right: 6, background: "rgba(0,0,0,0.6)", color: "white", border: "none", borderRadius: 8, width: 28, height: 28, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><X size={15} /></button>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 8, fontSize: 12, color: "#283593", fontWeight: 700, cursor: "pointer" }}>
+                      <Upload size={13} /> Replace
+                      <input type="file" accept="image/*" onChange={onPickImage} style={{ display: "none" }} />
+                    </label>
+                  </div>
+                ) : (
+                  <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, border: "2px dashed #dee2e6", borderRadius: 10, padding: "26px 16px", cursor: "pointer", color: "#adb5bd" }}>
+                    <ImageIcon size={26} />
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>Click to add a product picture</span>
+                    <span style={{ fontSize: 11 }}>jpg, png, webp</span>
+                    <input type="file" accept="image/*" onChange={onPickImage} style={{ display: "none" }} />
+                  </label>
+                )}
+              </div>
+
               {/* header fields */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <div><label style={lab}>Client</label><input style={inp} list="clientlist" value={Q.client_name} onChange={e => set("client_name", e.target.value)} placeholder="e.g. Shein" />

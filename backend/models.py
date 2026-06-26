@@ -419,6 +419,7 @@ class Quotation(Base):
     margin_pct = Column(Numeric(6, 2), default=0)
     quoted_price = Column(Numeric(10, 2), default=0)   # price you'll submit (optional)
     notes = Column(Text)
+    image_url = Column(String(500))                    # product / design reference picture
     converted_design_id = Column(Integer, ForeignKey("designs.id"), nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)

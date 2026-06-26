@@ -83,6 +83,7 @@ LIGHT_MIGRATIONS = [
     ("fabrics", "supplier_id", "INTEGER"),
     ("purchase_bills", "supplier_id", "INTEGER"),
     ("job_work", "vendor_id", "INTEGER"),
+    ("quotations", "image_url", "VARCHAR(500)"),
 ]
 
 
