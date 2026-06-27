@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
 import { useAuth } from "../context/AuthContext";
-import { Boxes, Plus, Layers, ScanLine, Trash2, X, MapPin, PackagePlus, Upload, RotateCcw, AlertTriangle, SlidersHorizontal, Printer, PackageMinus, Factory } from "lucide-react";
+import { Boxes, Plus, Layers, ScanLine, Trash2, X, MapPin, PackagePlus, Upload, RotateCcw, AlertTriangle, SlidersHorizontal, Printer, PackageMinus, Factory, Download } from "lucide-react";
 
 const S = {
   card: { background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" },
@@ -316,11 +316,34 @@ function StockTab({ stock }) {
   );
   useEffect(() => setPage(1), [ql]);
   const paged = pageSlice(rows, page, pageSize);
+
+  const downloadSheet = () => {
+    const esc = (v) => {
+      const s = String(v == null ? "" : v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ["SKU Code", "Name", "Size", "Sellable", "Quarantine", "Racks"];
+    const lines = [header.join(",")];
+    (rows || []).forEach(s => {
+      const racks = (s.racks || []).map(r => `${r.rack_code}: ${r.qty}`).join(" | ");
+      lines.push([s.sku_code, s.name || "", s.size || "", s.sellable, s.quarantine, racks].map(esc).join(","));
+    });
+    const csv = "\uFEFF" + lines.join("\n");   // BOM so Excel reads UTF-8
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    const today = new Date().toISOString().slice(0, 10);
+    a.href = url; a.download = `stock_sheet_${today}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div style={S.card}>
       <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <h3 style={S.h3}><Boxes size={15} /> Live Stock ({rows.length}{ql ? ` of ${stock.skus.length}` : ""} SKUs)</h3>
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search SKU, name, size, rack…" style={{ border: "none", borderRadius: 8, padding: "7px 12px", fontSize: 13, width: 240, maxWidth: "100%", outline: "none" }} />
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search SKU, name, size, rack…" style={{ border: "none", borderRadius: 8, padding: "7px 12px", fontSize: 13, width: 240, maxWidth: "100%", outline: "none" }} />
+          <button onClick={downloadSheet} disabled={!stock.skus.length} style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}><Download size={13} /> Download{ql ? " (filtered)" : ""}</button>
+        </div>
       </div>
       {stock.skus.length === 0 ? (
         <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No stock yet — add SKUs and inward them</div>
@@ -1134,12 +1157,20 @@ function LabelsTab({ skus, racks }) {
     finally { setBusy(false); }
   };
 
-  const skuRows = skus.map(s => ({ id: s.id, _code: s.sku_code, size: s.size, name: s.name }));
-  const rackRows = racks.map(r => ({ id: r.id, _code: r.code, zone: r.zone }));
+  const allSkuRows = skus.map(s => ({ id: s.id, _code: s.sku_code, size: s.size, name: s.name }));
+  const allRackRows = racks.map(r => ({ id: r.id, _code: r.code, zone: r.zone }));
+  const [skuQ, setSkuQ] = useState("");
+  const [rackQ, setRackQ] = useState("");
+  const sql = skuQ.trim().toLowerCase();
+  const rql = rackQ.trim().toLowerCase();
+  const skuRows = !sql ? allSkuRows : allSkuRows.filter(r => (r._code || "").toLowerCase().includes(sql) || (r.name || "").toLowerCase().includes(sql) || (r.size || "").toLowerCase().includes(sql));
+  const rackRows = !rql ? allRackRows : allRackRows.filter(r => (r._code || "").toLowerCase().includes(rql) || (r.zone || "").toLowerCase().includes(rql));
   const [skuPage, setSkuPage] = useState(1);
   const [skuPageSize, setSkuPageSize] = useState(100);
   const [rackPage, setRackPage] = useState(1);
   const [rackPageSize, setRackPageSize] = useState(100);
+  useEffect(() => setSkuPage(1), [sql]);
+  useEffect(() => setRackPage(1), [rql]);
   const skuPaged = pageSlice(skuRows, skuPage, skuPageSize);
   const rackPaged = pageSlice(rackRows, rackPage, rackPageSize);
 
@@ -1160,11 +1191,14 @@ function LabelsTab({ skus, racks }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
         <div style={S.card}>
-          <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <h3 style={S.h3}><Layers size={15} /> SKU Labels</h3>
-            <button onClick={() => doPrint(skuRows, skuCopies, "size")} disabled={busy} style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}><Printer size={13} /> {busy ? "..." : "Print"}</button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input value={skuQ} onChange={e => setSkuQ(e.target.value)} placeholder="Search SKU…" style={{ border: "none", borderRadius: 8, padding: "6px 10px", fontSize: 13, width: 150, outline: "none" }} />
+              <button onClick={() => doPrint(skuRows, skuCopies, "size")} disabled={busy} style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}><Printer size={13} /> {busy ? "..." : "Print"}</button>
+            </div>
           </div>
-          {skuRows.length === 0 ? <div style={{ textAlign: "center", padding: 40, color: "#adb5bd", fontSize: 14 }}>No SKUs yet</div> : (
+          {allSkuRows.length === 0 ? <div style={{ textAlign: "center", padding: 40, color: "#adb5bd", fontSize: 14 }}>No SKUs yet</div> : skuRows.length === 0 ? <div style={{ textAlign: "center", padding: 40, color: "#adb5bd", fontSize: 14 }}>No SKUs match "{skuQ}"</div> : (
             <div style={{ maxHeight: 460, overflowY: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr style={{ background: "#f8f9fc" }}>{["", "SKU", "Size", "Copies"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
@@ -1185,11 +1219,14 @@ function LabelsTab({ skus, racks }) {
         </div>
 
         <div style={S.card}>
-          <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <h3 style={S.h3}><MapPin size={15} /> Rack Labels</h3>
-            <button onClick={() => doPrint(rackRows, rackCopies, "zone")} disabled={busy} style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}><Printer size={13} /> {busy ? "..." : "Print"}</button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input value={rackQ} onChange={e => setRackQ(e.target.value)} placeholder="Search rack…" style={{ border: "none", borderRadius: 8, padding: "6px 10px", fontSize: 13, width: 140, outline: "none" }} />
+              <button onClick={() => doPrint(rackRows, rackCopies, "zone")} disabled={busy} style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}><Printer size={13} /> {busy ? "..." : "Print"}</button>
+            </div>
           </div>
-          {rackRows.length === 0 ? <div style={{ textAlign: "center", padding: 40, color: "#adb5bd", fontSize: 14 }}>No racks yet</div> : (
+          {allRackRows.length === 0 ? <div style={{ textAlign: "center", padding: 40, color: "#adb5bd", fontSize: 14 }}>No racks yet</div> : rackRows.length === 0 ? <div style={{ textAlign: "center", padding: 40, color: "#adb5bd", fontSize: 14 }}>No racks match "{rackQ}"</div> : (
             <div style={{ maxHeight: 460, overflowY: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr style={{ background: "#f8f9fc" }}>{["", "Rack", "Zone", "Copies"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
