@@ -13,6 +13,7 @@ from database import get_db
 from models import (
     WarehouseSku, WarehouseSubSku, WarehouseRack, WarehouseMovement, User,
     MarketplaceTemplate, WarehouseUploadBatch, AppSetting,
+    PackingLog, WarehouseProductionMap, Bundle, Design,
 )
 from auth import require_roles, get_current_user
 
@@ -980,3 +981,110 @@ def set_label_config(body: LabelConfig, db: Session = Depends(get_db),
         db.add(AppSetting(key=LABEL_KEY, value=json.dumps(cfg)))
     db.commit()
     return cfg
+
+# ════════════════════════════════════════════════════════════════════════════
+#  PRODUCTION → WAREHOUSE  (packed bundles auto-inward, size-aware)
+# ════════════════════════════════════════════════════════════════════════════
+def suggest_master_id(db, design, size):
+    """Best-effort: which master SKU is this design+size? Remembered choice first,
+    else match design code inside the SKU code with the same size."""
+    m = (db.query(WarehouseProductionMap)
+         .filter_by(design_id=design.id, size=size).first())
+    if m:
+        master = db.query(WarehouseSku).get(m.master_id)
+        if master:
+            return master.id, master.sku_code
+    dcode = norm(design.design_code or "")
+    want = (size or "").upper()
+    if dcode:
+        for sku in db.query(WarehouseSku).all():
+            if (sku.size or "").upper() == want and dcode and dcode in norm(sku.sku_code):
+                return sku.id, sku.sku_code
+    return None, None
+
+
+@router.get("/production/pending")
+def production_pending(db: Session = Depends(get_db),
+                       current_user: User = Depends(wh_admin)):
+    logs = (db.query(PackingLog).filter_by(inwarded=False)
+            .order_by(PackingLog.packed_at.desc()).all())
+    out = []
+    for log in logs:
+        bundle = db.query(Bundle).get(log.bundle_id) if log.bundle_id else None
+        design = db.query(Design).get(log.design_id) if log.design_id else None
+        if not design:
+            continue
+        try:
+            sizes = json.loads(log.sizes_json) if log.sizes_json else {}
+        except ValueError:
+            sizes = {}
+        lines = []
+        for size, qty in sizes.items():
+            mid, scode = suggest_master_id(db, design, size)
+            lines.append({"size": size, "qty": int(qty),
+                          "suggested_master_id": mid, "suggested_sku": scode})
+        out.append({
+            "packing_id": log.id, "bundle_id": log.bundle_id,
+            "bundle_code": bundle.bundle_code if bundle else "—",
+            "design_id": design.id, "design_code": design.design_code,
+            "design_name": design.design_name, "carton_no": log.carton_no,
+            "total_qty": log.total_qty,
+            "packed_at": log.packed_at.isoformat() if log.packed_at else None,
+            "lines": lines,
+        })
+    return out
+
+
+class ProdLine(BaseModel):
+    size: str
+    master_id: int
+    qty: int
+
+
+class ProdInwardIn(BaseModel):
+    packing_id: int
+    rack_code: str
+    lines: List[ProdLine]
+
+
+@router.post("/production/inward")
+def production_inward(body: ProdInwardIn, db: Session = Depends(get_db),
+                      current_user: User = Depends(wh_admin)):
+    log = db.query(PackingLog).get(body.packing_id)
+    if not log:
+        raise HTTPException(404, "Packing record not found")
+    if log.inwarded:
+        raise HTTPException(400, "This bundle is already in stock")
+    rn = norm(body.rack_code)
+    rack = db.query(WarehouseRack).filter(WarehouseRack.normalized_code == rn).first()
+    if not rack:
+        rack = db.query(WarehouseRack).filter(WarehouseRack.barcode == body.rack_code.strip()).first()
+    if not rack:
+        raise HTTPException(404, f"Rack '{body.rack_code}' not found")
+
+    bundle = db.query(Bundle).get(log.bundle_id) if log.bundle_id else None
+    ref = f"Production {bundle.bundle_code}" if bundle else "Production"
+    units = 0
+    for ln in body.lines:
+        if ln.qty <= 0:
+            continue
+        master = db.query(WarehouseSku).get(ln.master_id)
+        if not master:
+            raise HTTPException(400, f"SKU for size {ln.size} not found — pick a valid SKU")
+        db.add(WarehouseMovement(
+            master_id=master.id, rack_id=rack.id, bucket="sellable", qty=ln.qty,
+            move_type="inward", source="production", reference=ref,
+            created_by=current_user.id))
+        units += ln.qty
+        # remember the mapping design+size → master
+        existing = (db.query(WarehouseProductionMap)
+                    .filter_by(design_id=log.design_id, size=ln.size).first())
+        if existing:
+            existing.master_id = master.id
+        else:
+            db.add(WarehouseProductionMap(design_id=log.design_id, size=ln.size,
+                                          master_id=master.id))
+    log.inwarded = True
+    log.inwarded_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "inwarded_units": units, "rack_code": rack.code}

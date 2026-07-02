@@ -14,7 +14,8 @@ const S = {
 export default function Designer() {
   const [designs, setDesigns] = useState([]);
   const [fabrics, setFabrics] = useState([]);
-  const [form, setForm] = useState({ design_name: "", design_code: "", stitch_rate: "", target_qty: "", fabric_id: "", metres_per_piece: "" });
+  const [form, setForm] = useState({ design_name: "", design_code: "", stitch_rate: "", fabric_id: "", metres_per_piece: "" });
+  const [sizes, setSizes] = useState({});   // size -> qty (presence = selected)
   const [image, setImage] = useState(null);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -26,19 +27,24 @@ export default function Designer() {
 
   const submit = async (e) => {
     e.preventDefault();
+    const sizeList = Object.entries(sizes)
+      .map(([size, qty]) => ({ size, qty: parseInt(qty) || 0 }))
+      .filter(s => s.qty > 0);
+    if (sizeList.length === 0) { setMsg("Select at least one size and enter its quantity"); return; }
     setLoading(true);
     setMsg("");
     try {
       const fd = new FormData();
       Object.entries(form).forEach(([k, v]) => {
-        // only send fabric fields when actually filled in
         if ((k === "fabric_id" || k === "metres_per_piece") && (v === "" || v == null)) return;
         fd.append(k, v);
       });
+      fd.append("sizes", JSON.stringify(sizeList));
       if (image) fd.append("image", image);
       await api.post("/designs/", fd, { headers: { "Content-Type": "multipart/form-data" } });
       setMsg("Design created!");
-      setForm({ design_name: "", design_code: "", stitch_rate: "", target_qty: "", fabric_id: "", metres_per_piece: "" });
+      setForm({ design_name: "", design_code: "", stitch_rate: "", fabric_id: "", metres_per_piece: "" });
+      setSizes({});
       setImage(null);
       load();
     } catch (e) {
@@ -71,16 +77,29 @@ export default function Designer() {
               <input style={{ ...S.input, textTransform: "uppercase" }} placeholder="e.g. SK-001" value={form.design_code}
                 onChange={e => setForm(f => ({ ...f, design_code: e.target.value }))} required />
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
-              <div>
-                <label style={S.label}>Stitching Rate (₹)</label>
-                <input style={S.input} type="number" placeholder="35" min="1" value={form.stitch_rate}
-                  onChange={e => setForm(f => ({ ...f, stitch_rate: e.target.value }))} required />
+            <div style={{ marginBottom: 14 }}>
+              <label style={S.label}>Stitching Rate (₹ per piece)</label>
+              <input style={S.input} type="number" placeholder="35" min="1" value={form.stitch_rate}
+                onChange={e => setForm(f => ({ ...f, stitch_rate: e.target.value }))} required />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={S.label}>Size Plan — tick sizes and enter quantity</label>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+                {["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL"].map(sz => {
+                  const on = sizes[sz] !== undefined;
+                  return (
+                    <div key={sz} style={{ border: `1.5px solid ${on ? "#283593" : "#dee2e6"}`, borderRadius: 8, padding: "5px 6px", background: on ? "#eef2ff" : "white" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                        <input type="checkbox" checked={on} onChange={() => setSizes(s => { const n = { ...s }; if (on) delete n[sz]; else n[sz] = ""; return n; })} />
+                        {sz}
+                      </label>
+                      {on && <input autoFocus type="number" min="1" placeholder="qty" value={sizes[sz]} onChange={e => setSizes(s => ({ ...s, [sz]: e.target.value }))} style={{ width: "100%", marginTop: 4, border: "1px solid #dee2e6", borderRadius: 6, padding: "4px 6px", fontSize: 13, boxSizing: "border-box" }} />}
+                    </div>
+                  );
+                })}
               </div>
-              <div>
-                <label style={S.label}>Target Qty</label>
-                <input style={S.input} type="number" placeholder="500" min="1" value={form.target_qty}
-                  onChange={e => setForm(f => ({ ...f, target_qty: e.target.value }))} required />
+              <div style={{ fontSize: 12, color: "#6c757d", marginTop: 6, fontWeight: 700 }}>
+                Total target: {Object.values(sizes).reduce((a, v) => a + (parseInt(v) || 0), 0)} pcs
               </div>
             </div>
             <div style={{ background: "#f8f9fc", border: "1px dashed #dee2e6", borderRadius: 10, padding: 12, marginBottom: 14 }}>
@@ -144,7 +163,14 @@ export default function Designer() {
                       </td>
                       <td style={{ padding: "12px 16px", fontFamily: "monospace", fontSize: 13 }}>{d.design_code}</td>
                       <td style={{ padding: "12px 16px", fontWeight: 700, color: "#1b5e20" }}>₹{d.stitch_rate}</td>
-                      <td style={{ padding: "12px 16px" }}>{d.target_qty}</td>
+                      <td style={{ padding: "12px 16px" }}>
+                        <div style={{ fontWeight: 700 }}>{d.target_qty}</div>
+                        {d.sizes && d.sizes.length > 0 && (
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 3 }}>
+                            {d.sizes.map(s => <span key={s.size} style={{ background: "#eef2ff", color: "#283593", borderRadius: 5, padding: "1px 5px", fontSize: 10.5, fontWeight: 700 }}>{s.size}:{s.qty}</span>)}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: "12px 16px", fontSize: 12 }}>
                         {d.fabric_name
                           ? <span style={{ color: "#5d4037" }}>{d.fabric_name}<br/><span style={{ color: "#adb5bd" }}>{d.metres_per_piece} m/pc</span></span>

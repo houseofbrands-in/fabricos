@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Numeric
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Numeric, Boolean
 from sqlalchemy.orm import relationship, declarative_base
 
 Base = declarative_base()
@@ -47,6 +47,7 @@ class Bundle(Base):
     design_id = Column(Integer, ForeignKey("designs.id"))
     bundle_code = Column(String(50), unique=True, nullable=False)
     qty = Column(Integer, nullable=False)
+    size = Column(String(20))    # size this bundle is cut for (XS..4XL); empty for legacy
     # cut | in_progress | qc_pending | passed | alteration | ironing | packed
     status = Column(String(20), default="cut")
     qr_url = Column(String(500))
@@ -445,3 +446,39 @@ class QuotationItem(Base):
     category = Column(String(20))       # jobwork | trim | other
     label = Column(String(120))
     cost_per_piece = Column(Numeric(10, 2), default=0)
+
+# ════════════════════════════════════════════════════════════════════════════
+#  DESIGN SIZES  +  PACKING LOG  +  PRODUCTION→WAREHOUSE MAP  (size-aware floor)
+# ════════════════════════════════════════════════════════════════════════════
+class DesignSize(Base):
+    """The size plan a designer sets for a design: which sizes + how many each."""
+    __tablename__ = "design_sizes"
+    id = Column(Integer, primary_key=True)
+    design_id = Column(Integer, ForeignKey("designs.id"))
+    size = Column(String(20))
+    qty = Column(Integer, default=0)
+
+
+class PackingLog(Base):
+    """Persists a packed bundle (size + carton). Source for warehouse auto-inward."""
+    __tablename__ = "packing_logs"
+    id = Column(Integer, primary_key=True)
+    bundle_id = Column(Integer, ForeignKey("bundles.id"), unique=True)
+    design_id = Column(Integer, ForeignKey("designs.id"))
+    sizes_json = Column(Text)                       # {"L": 10}
+    total_qty = Column(Integer, default=0)
+    carton_no = Column(String(50))
+    packed_by = Column(Integer, ForeignKey("users.id"))
+    packed_at = Column(DateTime, default=datetime.utcnow)
+    inwarded = Column(Boolean, default=False)
+    inwarded_at = Column(DateTime, nullable=True)
+
+
+class WarehouseProductionMap(Base):
+    """Remembered mapping: a design + size → which warehouse master SKU it becomes."""
+    __tablename__ = "wh_production_map"
+    id = Column(Integer, primary_key=True)
+    design_id = Column(Integer, ForeignKey("designs.id"))
+    size = Column(String(20))
+    master_id = Column(Integer, ForeignKey("wh_skus.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)

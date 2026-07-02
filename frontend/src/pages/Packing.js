@@ -124,33 +124,35 @@ export default function Packing() {
                       <img src={`${API}${bundle.image_url}`} alt="" style={{ width: "100%", maxHeight: 140, objectFit: "cover", borderRadius: 8, marginBottom: 8 }} />
                     )}
                     <div style={{ fontWeight: 800, fontFamily: "monospace" }}>{bundle.bundle_code}</div>
-                    <div style={{ color: "#6c757d", fontSize: 13 }}>{bundle.design_name} · {bundle.qty} pcs</div>
+                    <div style={{ color: "#6c757d", fontSize: 13 }}>{bundle.design_name} · {bundle.qty} pcs{bundle.size ? <> · size <span style={{ background: "#eef2ff", color: "#283593", borderRadius: 6, padding: "1px 8px", fontWeight: 700 }}>{bundle.size}</span></> : ""}</div>
                   </div>
 
-                  {/* Size Breakup */}
-                  <div style={{ marginBottom: 14 }}>
-                    <label style={{ fontSize: 12, fontWeight: 700, color: "#495057", display: "block", marginBottom: 8 }}>
-                      Size Breakup <span style={{ color: "#adb5bd", fontWeight: 400 }}>(optional — leave blank if not applicable)</span>
-                    </label>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-                      {SIZES.map(s => (
-                        <div key={s}>
-                          <label style={{ fontSize: 11, fontWeight: 700, color: "#6c757d", display: "block", marginBottom: 2 }}>{s}</label>
-                          <input
-                            type="number" min="0" value={sizes[s] || ""}
-                            onChange={e => setSizes(prev => ({ ...prev, [s]: e.target.value }))}
-                            style={{ width: "100%", border: "1.5px solid #dee2e6", borderRadius: 8, padding: "8px", fontSize: 14, fontWeight: 700, outline: "none", boxSizing: "border-box", textAlign: "center" }}
-                            placeholder="0"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                    {totalSizes > 0 && (
-                      <div style={{ marginTop: 8, fontSize: 12, color: totalSizes === bundle.qty ? "#1b5e20" : "#f57f17", fontWeight: 700 }}>
-                        {totalSizes === bundle.qty ? "✓ Sizes match bundle qty" : `⚠ Total ${totalSizes} ≠ bundle qty ${bundle.qty}`}
+                  {/* Size — from the bundle (only ask manually for legacy bundles with no size) */}
+                  {!bundle.size && (
+                    <div style={{ marginBottom: 14 }}>
+                      <label style={{ fontSize: 12, fontWeight: 700, color: "#495057", display: "block", marginBottom: 8 }}>
+                        Size Breakup <span style={{ color: "#adb5bd", fontWeight: 400 }}>(this bundle has no size — enter if applicable)</span>
+                      </label>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+                        {SIZES.map(s => (
+                          <div key={s}>
+                            <label style={{ fontSize: 11, fontWeight: 700, color: "#6c757d", display: "block", marginBottom: 2 }}>{s}</label>
+                            <input
+                              type="number" min="0" value={sizes[s] || ""}
+                              onChange={e => setSizes(prev => ({ ...prev, [s]: e.target.value }))}
+                              style={{ width: "100%", border: "1.5px solid #dee2e6", borderRadius: 8, padding: "8px", fontSize: 14, fontWeight: 700, outline: "none", boxSizing: "border-box", textAlign: "center" }}
+                              placeholder="0"
+                            />
+                          </div>
+                        ))}
                       </div>
-                    )}
-                  </div>
+                      {totalSizes > 0 && (
+                        <div style={{ marginTop: 8, fontSize: 12, color: totalSizes === bundle.qty ? "#1b5e20" : "#f57f17", fontWeight: 700 }}>
+                          {totalSizes === bundle.qty ? "✓ Sizes match bundle qty" : `⚠ Total ${totalSizes} ≠ bundle qty ${bundle.qty}`}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Carton No */}
                   <div style={{ marginBottom: 16 }}>
@@ -208,7 +210,7 @@ export default function Packing() {
                       }
                       <div>
                         <div style={{ fontWeight: 700, fontFamily: "monospace", fontSize: 13 }}>{b.bundle_code}</div>
-                        <div style={{ color: "#6c757d", fontSize: 12 }}>{b.design_name} · {b.qty} pcs</div>
+                        <div style={{ color: "#6c757d", fontSize: 12 }}>{b.design_name} · {b.qty} pcs{b.size ? ` · ${b.size}` : ""}</div>
                       </div>
                     </div>
                     <span style={{ background: "#e8f4fd", color: "#1565c0", borderRadius: 20, padding: "3px 10px", fontSize: 12, fontWeight: 700 }}>Ironed ✓</span>
@@ -238,7 +240,7 @@ export default function Packing() {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                 <thead>
                   <tr style={{ background: "#f8f9fc" }}>
-                    {["Design", "Code", "Bundles", "Total Pieces"].map(h => (
+                    {["Design", "Code", "Bundles", "Total Pieces", "Size breakup"].map(h => (
                       <th key={h} style={{ padding: "10px 16px", textAlign: "left", fontSize: 12, fontWeight: 700, color: "#6c757d" }}>{h}</th>
                     ))}
                   </tr>
@@ -258,11 +260,16 @@ export default function Packing() {
                       <td style={{ padding: "12px 16px", fontFamily: "monospace", fontSize: 13 }}>{s.design_code}</td>
                       <td style={{ padding: "12px 16px" }}>{s.bundles}</td>
                       <td style={{ padding: "12px 16px", fontWeight: 800, fontSize: 16, color: "#1b5e20" }}>{s.total_pieces}</td>
+                      <td style={{ padding: "12px 16px" }}>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                          {(s.size_breakup || []).map(sb => <span key={sb.size} style={{ background: "#eef2ff", color: "#283593", borderRadius: 5, padding: "1px 7px", fontSize: 11.5, fontWeight: 700 }}>{sb.size}:{sb.qty}</span>)}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                   <tr style={{ background: "#f8f9fc", borderTop: "2px solid #dee2e6" }}>
                     <td colSpan={3} style={{ padding: "12px 16px", fontWeight: 800 }}>Total Packed</td>
-                    <td style={{ padding: "12px 16px", fontWeight: 900, fontSize: 18, color: "#e94560" }}>
+                    <td colSpan={2} style={{ padding: "12px 16px", fontWeight: 900, fontSize: 18, color: "#e94560" }}>
                       {summary.reduce((a, b) => a + b.total_pieces, 0)} pcs
                     </td>
                   </tr>
