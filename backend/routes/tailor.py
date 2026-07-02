@@ -55,6 +55,8 @@ def scan_bundle(
         "is_rework": is_rework,
         "rework_reasons": last_qc_reasons(db, bundle) if is_rework else [],
         "design_name": bundle.design.design_name,
+        "design_code": bundle.design.design_code,
+        "size": bundle.size,
         "image_url": bundle.design.image_url,
         "stitch_rate": bundle.design.stitch_rate,
     }
@@ -78,7 +80,44 @@ def submit_job(
     return {"ok": True}
 
 
-@router.get("/dashboard")
+@router.get("/history")
+def tailor_history(
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles("tailor")),
+):
+    """This tailor's completed bundles: what, when, made, passed, earned."""
+    jobs = (
+        db.query(TailorJob)
+        .filter(TailorJob.tailor_id == current_user.id, TailorJob.status == "submitted")
+        .order_by(TailorJob.submitted_at.desc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    out = []
+    for j in jobs:
+        b = j.bundle
+        if not b:
+            continue
+        d = b.design
+        logs = db.query(QCLog).filter(QCLog.tailor_job_id == j.id).all()
+        passed = sum(l.passed_qty or 0 for l in logs)
+        rate = d.stitch_rate or 0
+        out.append({
+            "job_id": j.id,
+            "bundle_code": b.bundle_code,
+            "design_name": d.design_name,
+            "design_code": d.design_code,
+            "size": b.size,
+            "image_url": d.image_url,
+            "qty": b.qty,
+            "passed": passed,
+            "stitch_rate": rate,
+            "earned": passed * rate,
+            "bundle_status": b.status,
+            "submitted_at": j.submitted_at.isoformat() if j.submitted_at else None,
+        })
+    return out
 def tailor_dashboard(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("tailor")),
@@ -141,6 +180,8 @@ def tailor_dashboard(
             "is_rework": is_rework,
             "rework_reasons": last_qc_reasons(db, b) if is_rework else [],
             "design_name": b.design.design_name,
+            "design_code": b.design.design_code,
+            "size": b.size,
             "image_url": b.design.image_url,
             "stitch_rate": b.design.stitch_rate,
             "started_at": active_job.started_at.isoformat(),

@@ -24,6 +24,7 @@ from routes.suppliers import router as suppliers_router
 from routes.warehouse import router as warehouse_router
 from routes.costing import router as costing_router
 from routes.quotations import router as quotations_router
+from routes.orders import router as orders_router
 
 app = FastAPI(title="FabricOS API", version="1.0.0")
 
@@ -51,6 +52,7 @@ app.include_router(suppliers_router)
 app.include_router(warehouse_router)
 app.include_router(costing_router)
 app.include_router(quotations_router)
+app.include_router(orders_router)
 
 
 # File serving (uploads + QR codes from /tmp)

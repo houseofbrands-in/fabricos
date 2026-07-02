@@ -10,6 +10,7 @@ import Ironing from "./pages/Ironing";
 import Packing from "./pages/Packing";
 import Store from "./pages/Store";
 import Quotations from "./pages/Quotations";
+import Orders from "./pages/Orders";
 import Warehouse from "./pages/Warehouse";
 
 function PrivateRoute({ element, allowed }) {
@@ -40,6 +41,7 @@ export default function App() {
           <Route path="/packing"  element={<PrivateRoute element={<Packing />}  allowed={["packing", "admin"]} />} />
           <Route path="/store"    element={<PrivateRoute element={<Store />}    allowed={["store", "admin"]} />} />
           <Route path="/quotations" element={<PrivateRoute element={<Quotations />} allowed={["designer", "admin"]} />} />
+          <Route path="/orders" element={<PrivateRoute element={<Orders />} allowed={["admin", "designer"]} />} />
           <Route path="/warehouse" element={<PrivateRoute element={<Warehouse />} allowed={["warehouse", "admin"]} />} />
           <Route path="/admin"    element={<PrivateRoute element={<Admin />}    allowed={["admin"]} />} />
           <Route path="*" element={<Navigate to="/" replace />} />

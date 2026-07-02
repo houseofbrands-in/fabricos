@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Numeric, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Numeric, Boolean, LargeBinary
 from sqlalchemy.orm import relationship, declarative_base
 
 Base = declarative_base()
@@ -482,3 +482,52 @@ class WarehouseProductionMap(Base):
     size = Column(String(20))
     master_id = Column(Integer, ForeignKey("wh_skus.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  CLIENT MASTER  +  CLIENT PURCHASE ORDERS  (FOB order intake; PDF stored in DB)
+# ════════════════════════════════════════════════════════════════════════════
+class Client(Base):
+    __tablename__ = "clients"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    gstin = Column(String(20))
+    contact_person = Column(String(120))
+    phone = Column(String(40))
+    email = Column(String(120))
+    ship_to = Column(Text)               # delivery / ship-to address
+    billing_address = Column(Text)
+    courier_default = Column(String(200))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ClientPO(Base):
+    __tablename__ = "client_pos"
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"))
+    po_number = Column(String(120))
+    po_date = Column(DateTime, nullable=True)
+    delivery_date = Column(DateTime, nullable=True)
+    status = Column(String(20), default="open")   # open | part_shipped | closed | cancelled
+    notes = Column(Text)
+    pdf_data = Column(LargeBinary)                 # the client's PO PDF, stored in DB
+    pdf_filename = Column(String(255))
+    pdf_mime = Column(String(100))
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    lines = relationship("ClientPOLine", cascade="all, delete-orphan")
+
+
+class ClientPOLine(Base):
+    __tablename__ = "client_po_lines"
+    id = Column(Integer, primary_key=True)
+    po_id = Column(Integer, ForeignKey("client_pos.id"))
+    item_code = Column(String(120))
+    description = Column(String(300))
+    colour = Column(String(80))
+    size = Column(String(40))
+    qty = Column(Integer, default=0)
+    rate = Column(Numeric(10, 2), default=0)
+    dispatched_qty = Column(Integer, default=0)    # filled by Dispatch (Part B)
