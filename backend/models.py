@@ -531,3 +531,41 @@ class ClientPOLine(Base):
     qty = Column(Integer, default=0)
     rate = Column(Numeric(10, 2), default=0)
     dispatched_qty = Column(Integer, default=0)    # filled by Dispatch (Part B)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  DISPATCH  (FOB outbound against a client PO; deducts warehouse stock FIFO)
+# ════════════════════════════════════════════════════════════════════════════
+class Dispatch(Base):
+    __tablename__ = "dispatches"
+    id = Column(Integer, primary_key=True)
+    po_id = Column(Integer, ForeignKey("client_pos.id"), nullable=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=True)
+    dispatch_no = Column(String(60))
+    dispatch_date = Column(DateTime, default=datetime.utcnow)
+    transporter = Column(String(200))
+    awb = Column(String(120))
+    box_count = Column(Integer, default=0)
+    ship_to = Column(Text)
+    status = Column(String(20), default="draft")   # draft | dispatched
+    notes = Column(Text)
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    lines = relationship("DispatchLine", cascade="all, delete-orphan")
+
+
+class DispatchLine(Base):
+    __tablename__ = "dispatch_lines"
+    id = Column(Integer, primary_key=True)
+    dispatch_id = Column(Integer, ForeignKey("dispatches.id"))
+    po_line_id = Column(Integer, ForeignKey("client_po_lines.id"), nullable=True)
+    master_id = Column(Integer, ForeignKey("wh_skus.id"), nullable=True)   # SKU to deduct
+    sku_code = Column(String(120))       # snapshot of warehouse SKU
+    item_code = Column(String(120))      # snapshot from PO line
+    description = Column(String(300))
+    colour = Column(String(80))
+    size = Column(String(40))
+    qty = Column(Integer, default=0)
+    rate = Column(Numeric(10, 2), default=0)
+    carton_no = Column(String(50))
