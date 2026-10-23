@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
-import { LogOut, Scissors, Package, Warehouse as WarehouseIcon, Calculator, FileText, Truck } from "lucide-react";
+import { useAuth, roleHome } from "../context/AuthContext";
+import { LogOut, Scissors, LayoutDashboard, Package, Warehouse as WarehouseIcon, Calculator, FileText, Truck } from "lucide-react";
 
 const ROLE_COLORS = {
   admin: "#e94560",
@@ -30,7 +30,8 @@ export default function Layout({ children }) {
         display: "flex", alignItems: "center", justifyContent: "space-between",
         boxShadow: "0 2px 12px rgba(0,0,0,0.2)", position: "sticky", top: 0, zIndex: 100,
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div onClick={() => navigate(user ? roleHome(user.role) : "/login")}
+          style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
           <Scissors size={20} color="#e94560" />
           <span style={{ color: "white", fontWeight: 900, fontSize: 18, letterSpacing: -0.5 }}>
             Fabric<span style={{ color: "#e94560" }}>OS</span>
@@ -38,6 +39,15 @@ export default function Layout({ children }) {
         </div>
         {user && (
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {user.role === "admin" && (
+              <button onClick={() => navigate("/admin")} style={{
+                background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: 8, color: "white", cursor: "pointer", padding: "4px 10px",
+                display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600,
+              }}>
+                <LayoutDashboard size={13} /> Admin
+              </button>
+            )}
             {user.role === "admin" && (
               <button onClick={() => navigate("/store")} style={{
                 background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.2)",
