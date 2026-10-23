@@ -133,11 +133,34 @@ class PurchaseBill(Base):
     supplier_name = Column(String(200), nullable=False)   # snapshot at time of bill
     invoice_number = Column(String(100))
     purchase_date = Column(DateTime, default=datetime.utcnow)
+    gst_pct = Column(Numeric(6, 2), default=0)            # GST % typed from the paper bill
     notes = Column(Text)
     created_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
 
     lots = relationship("FabricIntake", back_populates="bill")
+
+
+class PurchaseBillFile(Base):
+    """A photo / PDF page of the supplier's bill, stored in the DB (several per bill)."""
+    __tablename__ = "purchase_bill_files"
+    id = Column(Integer, primary_key=True)
+    bill_id = Column(Integer, ForeignKey("purchase_bills.id"))
+    file_data = Column(LargeBinary)
+    file_name = Column(String(255))
+    file_mime = Column(String(100))
+    uploaded_by = Column(Integer, ForeignKey("users.id"))
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PurchaseBillEdit(Base):
+    """Append-only log of every change made to a purchase bill after it was saved."""
+    __tablename__ = "purchase_bill_edits"
+    id = Column(Integer, primary_key=True)
+    bill_id = Column(Integer, ForeignKey("purchase_bills.id"))
+    changes_json = Column(Text)                           # JSON list of plain-text changes
+    edited_by = Column(Integer, ForeignKey("users.id"))
+    edited_at = Column(DateTime, default=datetime.utcnow)
 
 
 class FabricIntake(Base):

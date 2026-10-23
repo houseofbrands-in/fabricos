@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
 import { useAuth } from "../context/AuthContext";
-import { Layers, Plus, Truck, ClipboardCheck, PackageCheck, AlertTriangle, ArrowLeft, Trash2, X, History, RefreshCw, Users, Pencil } from "lucide-react";
+import { Layers, Plus, Truck, ClipboardCheck, PackageCheck, AlertTriangle, ArrowLeft, Trash2, X, History, RefreshCw, Users, Pencil, Paperclip, FileText } from "lucide-react";
 
 const S = {
   card: { background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" },
@@ -22,7 +22,7 @@ const EVENT_LABEL = {
   received: "Received", qc: "QC done", defective_open: "Defective logged",
   defective_resolved: "Defective resolved", sent_printing: "Sent to printing",
   sent_embroidery: "Sent to embroidery", returned_jobwork: "Returned from job work",
-  issued_cutting: "Issued to cutting",
+  issued_cutting: "Issued to cutting", bill_edited: "Bill edited",
 };
 
 function Msg({ msg }) {
@@ -456,10 +456,14 @@ function FabricsTab({ fabrics, reload, isAdmin, suppliers, reloadSuppliers }) {
 
 /* ─────────────────────────── PURCHASE TAB (multi-fabric bill) ─────────────────────────── */
 function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSuppliers }) {
-  const blankLine = { fabric_id: "", metres_received: "", num_rolls: "", cost_per_metre: "" };
   const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-  const [bill, setBill] = useState({ supplier_id: "", invoice_number: "", purchase_date: today(), notes: "" });
+  const blankBill = () => ({ supplier_id: "", invoice_number: "", purchase_date: today(), gst_pct: "", notes: "" });
+  const blankLine = { fabric_id: "", metres_received: "", num_rolls: "", cost_per_metre: "", notes: "" };
+  const [bill, setBill] = useState(blankBill());
   const [lines, setLines] = useState([{ ...blankLine }]);
+  const [newFiles, setNewFiles] = useState([]);
+  const [editId, setEditId] = useState(null);          // bill being edited (null = new bill)
+  const [openHist, setOpenHist] = useState({});        // bill id -> show edit history
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -467,30 +471,98 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSup
   const addLine = () => setLines(ls => [...ls, { ...blankLine }]);
   const removeLine = (i) => setLines(ls => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls);
 
-  const grandTotal = lines.reduce((sum, l) => sum + (parseFloat(l.metres_received) || 0) * (parseFloat(l.cost_per_metre) || 0), 0);
+  const taxable = lines.reduce((sum, l) => sum + (parseFloat(l.metres_received) || 0) * (parseFloat(l.cost_per_metre) || 0), 0);
+  const gstAmt = taxable * (parseFloat(bill.gst_pct) || 0) / 100;
+  const grandTotal = taxable + gstAmt;
+  const money = (v) => `₹${(Math.round((v || 0) * 100) / 100).toLocaleString("en-IN")}`;
+
+  const resetForm = () => { setBill(blankBill()); setLines([{ ...blankLine }]); setNewFiles([]); setEditId(null); };
+
+  const startEdit = (p) => {
+    setEditId(p.id); setMsg("");
+    setBill({
+      supplier_id: p.supplier_id ? String(p.supplier_id) : "",
+      invoice_number: p.invoice_number || "",
+      purchase_date: p.purchase_date ? p.purchase_date.slice(0, 10) : today(),
+      gst_pct: p.gst_pct ? String(p.gst_pct) : "",
+      notes: p.notes || "",
+    });
+    setLines(p.lines.map(l => ({
+      id: l.id, lot_code: l.lot_code, qc_done: l.qc_done,
+      fabric_id: String(l.fabric_id || ""), metres_received: String(l.metres_received ?? ""),
+      num_rolls: String(l.num_rolls ?? ""), cost_per_metre: String(l.cost_per_metre ?? ""), notes: l.notes || "",
+    })));
+    setNewFiles([]);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const uploadFiles = async (billId, files) => {
+    if (!files.length) return;
+    const fd = new FormData();
+    files.forEach(f => fd.append("files", f));
+    await api.post(`/fabric/purchase/${billId}/files`, fd);
+  };
+
+  const viewFile = async (f) => {
+    try {
+      const res = await api.get(`/fabric/purchase/files/${f.id}`, { responseType: "blob" });
+      window.open(URL.createObjectURL(res.data), "_blank");
+    } catch { alert("Could not open file"); }
+  };
+
+  const removeFile = async (f) => {
+    if (!window.confirm(`Remove ${f.file_name} from this bill?`)) return;
+    try { await api.delete(`/fabric/purchase/files/${f.id}`); } catch (e) { alert(e.response?.data?.detail || "Could not remove"); }
+    reload();
+  };
+
+  const attachToBill = async (billId, fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    try { await uploadFiles(billId, files); } catch (e) { alert(e.response?.data?.detail || "Upload failed"); }
+    reload();
+  };
 
   const submit = async (e) => {
     e.preventDefault(); setMsg("");
     if (!bill.supplier_id) { setMsg("Choose a supplier"); return; }
     const valid = lines.filter(l => l.fabric_id && parseFloat(l.metres_received) > 0);
     if (!valid.length) { setMsg("Add at least one fabric line with metres"); return; }
+    const payload = {
+      supplier_id: parseInt(bill.supplier_id),
+      invoice_number: bill.invoice_number,
+      purchase_date: bill.purchase_date,
+      gst_pct: parseFloat(bill.gst_pct) || 0,
+      notes: bill.notes,
+      lines: valid.map(l => ({
+        ...(l.id ? { id: l.id } : {}),
+        fabric_id: parseInt(l.fabric_id),
+        metres_received: parseFloat(l.metres_received),
+        num_rolls: parseInt(l.num_rolls) || 0,
+        cost_per_metre: parseFloat(l.cost_per_metre) || 0,
+        notes: l.notes || "",
+      })),
+    };
     setLoading(true);
     try {
-      const { data } = await api.post("/fabric/purchase", {
-        supplier_id: parseInt(bill.supplier_id),
-        invoice_number: bill.invoice_number,
-        purchase_date: bill.purchase_date,
-        notes: bill.notes,
-        lines: valid.map(l => ({
-          fabric_id: parseInt(l.fabric_id),
-          metres_received: parseFloat(l.metres_received),
-          num_rolls: parseInt(l.num_rolls) || 0,
-          cost_per_metre: parseFloat(l.cost_per_metre) || 0,
-        })),
-      });
-      setMsg(`✅ Bill saved! ${data.lots_created} lot(s) created: ${data.lot_codes.join(", ")}. Now do Fabric QC on them.`);
-      setBill({ supplier_id: "", invoice_number: "", purchase_date: today(), notes: "" });
-      setLines([{ ...blankLine }]);
+      if (editId) {
+        const { data } = await api.put(`/fabric/purchase/${editId}`, payload);
+        let fileNote = "";
+        if (newFiles.length) {
+          try { await uploadFiles(editId, newFiles); fileNote = ` ${newFiles.length} file(s) attached.`; }
+          catch (er) { fileNote = ` ⚠ File upload failed: ${er.response?.data?.detail || "error"}`; }
+        }
+        setMsg(data.changes.length ? `✅ Bill updated (${data.changes.length} change${data.changes.length > 1 ? "s" : ""}).${fileNote}` : `✅ No changes to save.${fileNote}`);
+      } else {
+        const { data } = await api.post("/fabric/purchase", payload);
+        let fileNote = "";
+        if (newFiles.length) {
+          try { await uploadFiles(data.bill_id, newFiles); fileNote = ` ${newFiles.length} file(s) attached.`; }
+          catch (er) { fileNote = ` ⚠ Bill saved but file upload failed: ${er.response?.data?.detail || "error"} — attach again from Purchase History.`; }
+        }
+        setMsg(`✅ Bill saved! ${data.lots_created} lot(s) created: ${data.lot_codes.join(", ")}. Now do Fabric QC on them.${fileNote}`);
+      }
+      resetForm();
       reload();
     } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
     finally { setLoading(false); }
@@ -499,7 +571,10 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSup
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(320px,480px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={S.card}>
-        <div style={S.header}><h3 style={S.h3}><Truck size={15} /> Record Purchase Bill</h3></div>
+        <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h3 style={S.h3}>{editId ? <><Pencil size={15} /> Edit Purchase Bill</> : <><Truck size={15} /> Record Purchase Bill</>}</h3>
+          {editId && <button type="button" onClick={() => { resetForm(); setMsg(""); }} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "white", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>Cancel edit</button>}
+        </div>
         <form onSubmit={submit} style={{ padding: 20 }}>
           <Msg msg={msg} />
           <div style={{ marginBottom: 14 }}>
@@ -508,48 +583,74 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSup
               reloadSuppliers={reloadSuppliers} placeholder="Select supplier…"
               onChange={v => setBill(b => ({ ...b, supplier_id: v }))} />
           </div>
-          <div style={{ marginBottom: 14 }}>
-            <label style={S.label}>Invoice No.</label>
-            <input style={S.input} placeholder="e.g. INV-5501" value={bill.invoice_number}
-              onChange={e => setBill(b => ({ ...b, invoice_number: e.target.value }))} />
-          </div>
-          <div style={{ marginBottom: 14 }}>
-            <label style={S.label}>Bill Date</label>
-            <input style={S.input} type="date" value={bill.purchase_date}
-              onChange={e => setBill(b => ({ ...b, purchase_date: e.target.value }))} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+            <div>
+              <label style={S.label}>Invoice No.</label>
+              <input style={S.input} placeholder="e.g. INV-5501" value={bill.invoice_number}
+                onChange={e => setBill(b => ({ ...b, invoice_number: e.target.value }))} />
+            </div>
+            <div>
+              <label style={S.label}>Bill Date</label>
+              <input style={S.input} type="date" value={bill.purchase_date}
+                onChange={e => setBill(b => ({ ...b, purchase_date: e.target.value }))} />
+            </div>
           </div>
 
           <label style={S.label}>Fabrics on this bill</label>
-          {lines.map((l, i) => (
-            <div key={i} style={{ border: "1px solid #eee", borderRadius: 10, padding: 10, marginBottom: 8 }}>
-              <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
-                <select style={{ ...S.input, flex: 1 }} value={l.fabric_id} onChange={e => updateLine(i, "fabric_id", e.target.value)}>
-                  <option value="">Select fabric…</option>
-                  {fabrics.map(f => <option key={f.id} value={f.id}>{f.fabric_name}</option>)}
-                </select>
-                {lines.length > 1 && (
-                  <button type="button" onClick={() => removeLine(i)} style={{ background: "#ffe0e3", border: "none", borderRadius: 8, padding: "8px", cursor: "pointer", color: "#b71c1c" }}><Trash2 size={14} /></button>
+          {lines.map((l, i) => {
+            const locked = !!l.qc_done;   // QC done → fabric + metres locked
+            return (
+              <div key={l.id || `new-${i}`} style={{ border: "1px solid #eee", borderRadius: 10, padding: 10, marginBottom: 8, background: locked ? "#fafafa" : "white" }}>
+                {l.lot_code && (
+                  <div style={{ fontSize: 11, color: "#6c757d", marginBottom: 6 }}>
+                    <b style={{ fontFamily: "monospace" }}>{l.lot_code}</b>
+                    {locked && <span style={{ marginLeft: 6, color: "#7a5b00" }}>· QC done — fabric &amp; metres locked</span>}
+                  </div>
                 )}
+                <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                  <select style={{ ...S.input, flex: 1 }} value={l.fabric_id} disabled={locked} onChange={e => updateLine(i, "fabric_id", e.target.value)}>
+                    <option value="">Select fabric…</option>
+                    {fabrics.map(f => <option key={f.id} value={f.id}>{f.fabric_name}</option>)}
+                  </select>
+                  {lines.length > 1 && !locked && (
+                    <button type="button" onClick={() => removeLine(i)} style={{ background: "#ffe0e3", border: "none", borderRadius: 8, padding: "8px", cursor: "pointer", color: "#b71c1c" }}><Trash2 size={14} /></button>
+                  )}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <input style={S.input} type="number" step="0.01" min="0" placeholder="Metres" value={l.metres_received} disabled={locked} onChange={e => updateLine(i, "metres_received", e.target.value)} />
+                  <input style={S.input} type="number" min="0" placeholder="Rolls" value={l.num_rolls} onChange={e => updateLine(i, "num_rolls", e.target.value)} />
+                  <input style={S.input} type="number" step="0.01" min="0" placeholder="₹/metre" value={l.cost_per_metre} onChange={e => updateLine(i, "cost_per_metre", e.target.value)} />
+                </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                <input style={S.input} type="number" step="0.01" min="0" placeholder="Metres" value={l.metres_received} onChange={e => updateLine(i, "metres_received", e.target.value)} />
-                <input style={S.input} type="number" min="0" placeholder="Rolls" value={l.num_rolls} onChange={e => updateLine(i, "num_rolls", e.target.value)} />
-                <input style={S.input} type="number" step="0.01" min="0" placeholder="₹/metre" value={l.cost_per_metre} onChange={e => updateLine(i, "cost_per_metre", e.target.value)} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
           <button type="button" onClick={addLine} style={{ background: "#eef2ff", color: "#3730a3", border: "none", borderRadius: 8, padding: "8px 12px", fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 14, display: "flex", alignItems: "center", gap: 5 }}>
             <Plus size={14} /> Add another fabric
           </button>
 
-          {grandTotal > 0 && (
-            <div style={{ background: "#f8f9fc", border: "1px dashed #dee2e6", borderRadius: 10, padding: 12, marginBottom: 16, textAlign: "center" }}>
-              <div style={{ fontSize: 11, color: "#6c757d" }}>Bill Total</div>
-              <div style={{ fontSize: 22, fontWeight: 900, color: "#1565c0" }}>₹{grandTotal.toLocaleString("en-IN")}</div>
+          <div style={{ marginBottom: 14 }}>
+            <label style={S.label}>GST % <span style={{ color: "#adb5bd", fontWeight: 400 }}>(as printed on the bill)</span></label>
+            <input style={S.input} type="number" step="0.01" min="0" placeholder="e.g. 5" value={bill.gst_pct}
+              onChange={e => setBill(b => ({ ...b, gst_pct: e.target.value }))} />
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={S.label}>Bill photo / PDF <span style={{ color: "#adb5bd", fontWeight: 400 }}>(optional · several pages allowed · max 15 MB each)</span></label>
+            <input type="file" multiple accept="image/*,application/pdf" onChange={e => setNewFiles(Array.from(e.target.files || []))} style={{ fontSize: 13 }} />
+            {newFiles.length > 0 && <div style={{ fontSize: 12, color: "#6c757d", marginTop: 4 }}>{newFiles.length} file(s) will be attached when you save</div>}
+          </div>
+
+          {taxable > 0 && (
+            <div style={{ background: "#f8f9fc", border: "1px dashed #dee2e6", borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13 }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}><span style={{ color: "#6c757d" }}>Taxable value</span><b>{money(taxable)}</b></div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}><span style={{ color: "#6c757d" }}>GST {parseFloat(bill.gst_pct) || 0}%</span><b>{money(gstAmt)}</b></div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, paddingTop: 6, borderTop: "1px solid #dee2e6" }}>
+                <span style={{ fontWeight: 700 }}>Bill Total</span><span style={{ fontSize: 20, fontWeight: 900, color: "#1565c0" }}>{money(grandTotal)}</span>
+              </div>
             </div>
           )}
           <button type="submit" style={{ ...S.btn, width: "100%", opacity: loading ? 0.7 : 1 }} disabled={loading}>
-            {loading ? "Saving..." : "Save Purchase Bill"}
+            {loading ? "Saving..." : editId ? "Save Changes" : "Save Purchase Bill"}
           </button>
         </form>
       </div>
@@ -561,7 +662,7 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSup
         ) : (
           <div style={{ padding: 12 }}>
             {purchases.map(p => (
-              <div key={p.id} style={{ border: "1px solid #f0f0f0", borderRadius: 12, padding: 14, marginBottom: 12 }}>
+              <div key={p.id} style={{ border: editId === p.id ? "2px solid #e94560" : "1px solid #f0f0f0", borderRadius: 12, padding: 14, marginBottom: 12 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
                   <div>
                     <span style={{ fontWeight: 700 }}>{p.supplier_name}</span>
@@ -569,7 +670,8 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSup
                     <div style={{ fontSize: 11, color: "#adb5bd" }}>{p.purchase_date ? new Date(p.purchase_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : ""}</div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={S.pill("#e8f4fd", "#1565c0")}>₹{(p.total_cost || 0).toLocaleString("en-IN")}</span>
+                    <span style={S.pill("#e8f4fd", "#1565c0")} title={`Taxable ${money(p.total_cost)} + GST ${p.gst_pct || 0}% ${money(p.gst_amount)}`}>{money(p.bill_total ?? p.total_cost)}</span>
+                    <button onClick={() => startEdit(p)} title="Edit bill" style={{ background: "#eef2ff", border: "none", borderRadius: 8, padding: "6px 8px", cursor: "pointer", color: "#3730a3", display: "inline-flex", alignItems: "center" }}><Pencil size={13} /></button>
                     {isAdmin && <DelBtn onClick={() => doDelete(`/fabric/purchase/${p.id}`, reload)} />}
                   </div>
                 </div>
@@ -587,6 +689,43 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSup
                     ))}
                   </tbody>
                 </table>
+                <div style={{ fontSize: 12, color: "#6c757d", marginTop: 8 }}>
+                  Taxable {money(p.total_cost)} · GST {p.gst_pct || 0}% {money(p.gst_amount)} · <b style={{ color: "#1a1a2e" }}>Total {money(p.bill_total ?? p.total_cost)}</b>
+                </div>
+
+                {/* attached bill files */}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 8 }}>
+                  {(p.files || []).map(f => (
+                    <span key={f.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#f1f3f5", borderRadius: 8, padding: "3px 8px", fontSize: 12 }}>
+                      <FileText size={12} />
+                      <button type="button" onClick={() => viewFile(f)} style={{ background: "none", border: "none", padding: 0, color: "#1565c0", cursor: "pointer", fontSize: 12, textDecoration: "underline" }}>{f.file_name}</button>
+                      <button type="button" onClick={() => removeFile(f)} title="Remove file" style={{ background: "none", border: "none", padding: 0, color: "#b71c1c", cursor: "pointer", display: "inline-flex" }}><X size={12} /></button>
+                    </span>
+                  ))}
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#eef2ff", color: "#3730a3", borderRadius: 8, padding: "3px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    <Paperclip size={12} /> Attach bill
+                    <input type="file" multiple accept="image/*,application/pdf" style={{ display: "none" }} onChange={e => { attachToBill(p.id, e.target.files); e.target.value = ""; }} />
+                  </label>
+                </div>
+
+                {/* edit history */}
+                {(p.edits || []).length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <button type="button" onClick={() => setOpenHist(h => ({ ...h, [p.id]: !h[p.id] }))} style={{ background: "none", border: "none", padding: 0, color: "#6c757d", cursor: "pointer", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <History size={12} /> Edit history ({p.edits.length}) · {openHist[p.id] ? "hide" : "show"}
+                    </button>
+                    {openHist[p.id] && (
+                      <div style={{ marginTop: 6, borderLeft: "3px solid #dee2e6", paddingLeft: 10 }}>
+                        {p.edits.map(ed => (
+                          <div key={ed.id} style={{ fontSize: 12, marginBottom: 6 }}>
+                            <div style={{ color: "#adb5bd" }}>{ed.edited_at ? new Date(ed.edited_at + "Z").toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : ""} · {ed.edited_by}</div>
+                            {ed.changes.map((c, i) => <div key={i} style={{ color: "#495057" }}>• {c}</div>)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

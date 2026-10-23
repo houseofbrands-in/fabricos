@@ -1,7 +1,9 @@
 import json
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException
+import io
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -9,6 +11,7 @@ from database import get_db
 from models import (
     Fabric, FabricIntake, FabricQC, JobWork, FabricConsumption,
     PurchaseBill, DefectiveFabric, FabricStageHistory, Design, User, Supplier,
+    PurchaseBillFile, PurchaseBillEdit,
 )
 from auth import require_roles, get_current_user
 from fabric_utils import fabric_live_stock, fabric_stock_breakdown, log_fabric_event
@@ -29,6 +32,12 @@ def _delete_lot_cascade(db, intake):
     return bill_id
 
 
+def _delete_bill_children(db, bill_id):
+    """Remove a bill's attached files + edit history (before the bill itself)."""
+    db.query(PurchaseBillFile).filter_by(bill_id=bill_id).delete()
+    db.query(PurchaseBillEdit).filter_by(bill_id=bill_id).delete()
+
+
 def _cleanup_empty_bills(db, bill_ids):
     """Drop purchase bills that no longer have any lots."""
     db.flush()
@@ -36,6 +45,7 @@ def _cleanup_empty_bills(db, bill_ids):
         if db.query(FabricIntake).filter_by(purchase_bill_id=bid).count() == 0:
             bill = db.query(PurchaseBill).get(bid)
             if bill:
+                _delete_bill_children(db, bid)
                 db.delete(bill)
 
 
@@ -192,6 +202,7 @@ class PurchaseIn(BaseModel):
     supplier_name: Optional[str] = ""
     invoice_number: Optional[str] = ""
     purchase_date: Optional[str] = None     # "YYYY-MM-DD" from the bill; blank = today
+    gst_pct: float = 0                      # GST % as printed on the bill
     notes: Optional[str] = ""
     lines: List[PurchaseLine]
 
@@ -228,6 +239,7 @@ def create_purchase(
         supplier_name=supplier_name,
         invoice_number=(body.invoice_number or "").strip(),
         purchase_date=_parse_date(body.purchase_date) or datetime.utcnow(),
+        gst_pct=max(0.0, body.gst_pct or 0),
         notes=(body.notes or "").strip(),
         created_by=current_user.id,
     )
@@ -271,27 +283,257 @@ def list_purchases(
     current_user: User = Depends(get_current_user),
 ):
     bills = db.query(PurchaseBill).order_by(PurchaseBill.purchase_date.desc()).all()
+    names = {u.id: u.name for u in db.query(User).all()}
     out = []
     for b in bills:
         lines = [{
+            "id": l.id,
+            "fabric_id": l.fabric_id,
             "lot_code": l.lot_code,
             "fabric_name": l.fabric.fabric_name if l.fabric else None,
             "metres_received": _f(l.metres_received),
             "num_rolls": l.num_rolls,
             "cost_per_metre": _f(l.cost_per_metre),
             "total_cost": _f(l.total_cost),
+            "notes": l.notes or "",
             "qc_done": l.qc is not None,
-        } for l in b.lots]
+        } for l in sorted(b.lots, key=lambda x: x.id)]
+        taxable = round(sum(float(l.total_cost or 0) for l in b.lots), 2)
+        gst_pct = float(b.gst_pct or 0)
+        gst_amount = round(taxable * gst_pct / 100, 2)
+        # file list WITHOUT loading the file bytes
+        files = (db.query(PurchaseBillFile.id, PurchaseBillFile.file_name,
+                          PurchaseBillFile.file_mime, PurchaseBillFile.uploaded_at)
+                 .filter(PurchaseBillFile.bill_id == b.id)
+                 .order_by(PurchaseBillFile.id).all())
+        edits = (db.query(PurchaseBillEdit).filter_by(bill_id=b.id)
+                 .order_by(PurchaseBillEdit.edited_at.desc()).all())
         out.append({
             "id": b.id,
+            "supplier_id": b.supplier_id,
             "supplier_name": b.supplier_name,
             "invoice_number": b.invoice_number,
             "purchase_date": b.purchase_date.isoformat() if b.purchase_date else None,
             "notes": b.notes,
             "lines": lines,
-            "total_cost": round(sum(float(l.total_cost or 0) for l in b.lots), 2),
+            "total_cost": taxable,             # taxable value (before GST) — unchanged meaning
+            "gst_pct": gst_pct,
+            "gst_amount": gst_amount,
+            "bill_total": round(taxable + gst_amount, 2),
+            "files": [{"id": f.id, "file_name": f.file_name, "file_mime": f.file_mime,
+                       "uploaded_at": f.uploaded_at.isoformat() if f.uploaded_at else None}
+                      for f in files],
+            "edits": [{"id": e.id, "edited_by": names.get(e.edited_by, "—"),
+                       "edited_at": e.edited_at.isoformat() if e.edited_at else None,
+                       "changes": json.loads(e.changes_json or "[]")} for e in edits],
         })
     return out
+
+
+# ── edit a saved bill (store + admin). Lots that have had Fabric QC are locked
+#    for fabric + metres (those numbers already drive stock); rate/rolls/notes stay editable.
+class PurchaseEditLine(BaseModel):
+    id: Optional[int] = None          # existing lot id; blank = a new line on this bill
+    fabric_id: int
+    metres_received: float
+    num_rolls: int = 0
+    cost_per_metre: float = 0
+    notes: Optional[str] = ""
+
+
+class PurchaseEditIn(BaseModel):
+    supplier_id: Optional[int] = None
+    invoice_number: Optional[str] = ""
+    purchase_date: Optional[str] = None
+    gst_pct: float = 0
+    notes: Optional[str] = ""
+    lines: List[PurchaseEditLine]
+
+
+def _log_bill_edit(db, bill_id, changes, user_id):
+    if changes:
+        db.add(PurchaseBillEdit(bill_id=bill_id, changes_json=json.dumps(changes),
+                                edited_by=user_id))
+
+
+def _num(v):
+    return round(float(v or 0), 2)
+
+
+@router.put("/purchase/{bill_id}")
+def edit_purchase(
+    bill_id: int,
+    body: PurchaseEditIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(store_admin),
+):
+    bill = db.query(PurchaseBill).get(bill_id)
+    if not bill:
+        raise HTTPException(404, "Bill not found")
+    if not body.lines:
+        raise HTTPException(400, "A bill needs at least one fabric line")
+    changes = []
+
+    # ── header ──
+    if body.supplier_id and body.supplier_id != bill.supplier_id:
+        new_name = _supplier_name(db, body.supplier_id)
+        if not new_name:
+            raise HTTPException(400, "Supplier not found")
+        changes.append(f"Supplier: {bill.supplier_name} → {new_name}")
+        bill.supplier_id = body.supplier_id
+        bill.supplier_name = new_name
+    inv = (body.invoice_number or "").strip()
+    if inv != (bill.invoice_number or ""):
+        changes.append(f"Invoice: {bill.invoice_number or '—'} → {inv or '—'}")
+        bill.invoice_number = inv
+    new_date = _parse_date(body.purchase_date)
+    if new_date and (not bill.purchase_date or new_date.date() != bill.purchase_date.date()):
+        old = bill.purchase_date.strftime("%d-%m-%Y") if bill.purchase_date else "—"
+        changes.append(f"Bill date: {old} → {new_date.strftime('%d-%m-%Y')}")
+        bill.purchase_date = new_date
+    gst = max(0.0, body.gst_pct or 0)
+    if _num(gst) != _num(bill.gst_pct):
+        changes.append(f"GST: {_num(bill.gst_pct)}% → {_num(gst)}%")
+        bill.gst_pct = gst
+    notes = (body.notes or "").strip()
+    if notes != (bill.notes or ""):
+        changes.append("Bill notes changed")
+        bill.notes = notes
+
+    # ── lines ──
+    existing = {l.id: l for l in bill.lots}
+    keep_ids = {ln.id for ln in body.lines if ln.id}
+    for lid in keep_ids:
+        if lid not in existing:
+            raise HTTPException(400, f"Line {lid} does not belong to this bill")
+
+    # removed lines — only allowed before QC
+    for lid, lot in existing.items():
+        if lid in keep_ids:
+            continue
+        if lot.qc is not None:
+            raise HTTPException(400, f"{lot.lot_code} has Fabric QC done — it can't be removed from the bill")
+        changes.append(f"Removed {lot.lot_code} ({lot.fabric.fabric_name if lot.fabric else '—'}, {_num(lot.metres_received)} m)")
+        _delete_lot_cascade(db, lot)
+
+    for ln in body.lines:
+        fabric = db.query(Fabric).get(ln.fabric_id)
+        if not fabric:
+            raise HTTPException(404, f"Fabric {ln.fabric_id} not found")
+        if ln.metres_received <= 0:
+            raise HTTPException(400, "Each line needs metres greater than 0")
+        rate = max(0.0, ln.cost_per_metre or 0)
+        rolls = max(0, ln.num_rolls or 0)
+        lnotes = (ln.notes or "").strip()
+
+        if not ln.id:   # new line → new lot
+            intake = FabricIntake(
+                fabric_id=ln.fabric_id, purchase_bill_id=bill.id, lot_code="PENDING",
+                metres_received=ln.metres_received, num_rolls=rolls, cost_per_metre=rate,
+                total_cost=round(ln.metres_received * rate, 2), notes=lnotes)
+            db.add(intake)
+            db.flush()
+            intake.lot_code = _next_lot_code(db, intake)
+            log_fabric_event(db, ln.fabric_id, "received",
+                             detail=f"Lot {intake.lot_code} · {ln.metres_received} m · {bill.supplier_name}"
+                             + (f" · Inv {bill.invoice_number}" if bill.invoice_number else "")
+                             + " (added by bill edit)",
+                             intake_id=intake.id, metres=ln.metres_received, user_id=current_user.id)
+            changes.append(f"Added {intake.lot_code} ({fabric.fabric_name}, {_num(ln.metres_received)} m @ ₹{_num(rate)})")
+            continue
+
+        lot = existing[ln.id]
+        qc_done = lot.qc is not None
+        lot_changes = []
+        if ln.fabric_id != lot.fabric_id:
+            if qc_done:
+                raise HTTPException(400, f"{lot.lot_code} has Fabric QC done — fabric can't be changed")
+            old_name = lot.fabric.fabric_name if lot.fabric else "—"
+            # move this lot's timeline over to the corrected fabric
+            db.query(FabricStageHistory).filter_by(fabric_intake_id=lot.id).update(
+                {FabricStageHistory.fabric_id: ln.fabric_id})
+            lot.fabric_id = ln.fabric_id
+            lot_changes.append(f"fabric {old_name} → {fabric.fabric_name}")
+        if _num(ln.metres_received) != _num(lot.metres_received):
+            if qc_done:
+                raise HTTPException(400, f"{lot.lot_code} has Fabric QC done — metres can't be changed")
+            lot_changes.append(f"metres {_num(lot.metres_received)} → {_num(ln.metres_received)}")
+            lot.metres_received = ln.metres_received
+        if _num(rate) != _num(lot.cost_per_metre):
+            lot_changes.append(f"rate ₹{_num(lot.cost_per_metre)} → ₹{_num(rate)}")
+            lot.cost_per_metre = rate
+        if rolls != (lot.num_rolls or 0):
+            lot_changes.append(f"rolls {lot.num_rolls or 0} → {rolls}")
+            lot.num_rolls = rolls
+        if lnotes != (lot.notes or ""):
+            lot_changes.append("notes changed")
+            lot.notes = lnotes
+        if lot_changes:
+            lot.total_cost = round(float(lot.metres_received or 0) * float(lot.cost_per_metre or 0), 2)
+            log_fabric_event(db, lot.fabric_id, "bill_edited",
+                             detail=f"Lot {lot.lot_code}: " + ", ".join(lot_changes),
+                             intake_id=lot.id, user_id=current_user.id)
+            changes.append(f"{lot.lot_code}: " + ", ".join(lot_changes))
+
+    _log_bill_edit(db, bill.id, changes, current_user.id)
+    db.commit()
+    return {"ok": True, "changes": changes}
+
+
+# ── supplier bill photos / PDFs (several per bill, stored in the DB) ──────────
+MAX_BILL_FILE = 15 * 1024 * 1024
+
+
+@router.post("/purchase/{bill_id}/files")
+def upload_bill_files(
+    bill_id: int,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(store_admin),
+):
+    bill = db.query(PurchaseBill).get(bill_id)
+    if not bill:
+        raise HTTPException(404, "Bill not found")
+    saved = []
+    for f in files:
+        data = f.file.read()
+        mime = f.content_type or ""
+        if not data:
+            raise HTTPException(400, f"{f.filename}: empty file")
+        if len(data) > MAX_BILL_FILE:
+            raise HTTPException(400, f"{f.filename}: too large (max 15 MB)")
+        if not (mime.startswith("image/") or mime == "application/pdf"):
+            raise HTTPException(400, f"{f.filename}: only photos or PDF files are allowed")
+        db.add(PurchaseBillFile(bill_id=bill.id, file_data=data,
+                                file_name=f.filename or "bill", file_mime=mime,
+                                uploaded_by=current_user.id))
+        saved.append(f.filename or "bill")
+    _log_bill_edit(db, bill.id, [f"Attached file: {n}" for n in saved], current_user.id)
+    db.commit()
+    return {"ok": True, "uploaded": len(saved)}
+
+
+@router.get("/purchase/files/{file_id}")
+def get_bill_file(file_id: int, db: Session = Depends(get_db),
+                  current_user: User = Depends(get_current_user)):
+    f = db.query(PurchaseBillFile).get(file_id)
+    if not f or not f.file_data:
+        raise HTTPException(404, "File not found")
+    return StreamingResponse(
+        io.BytesIO(f.file_data), media_type=f.file_mime or "application/octet-stream",
+        headers={"Content-Disposition": f'inline; filename="{f.file_name or "bill"}"'})
+
+
+@router.delete("/purchase/files/{file_id}")
+def delete_bill_file(file_id: int, db: Session = Depends(get_db),
+                     current_user: User = Depends(store_admin)):
+    f = db.query(PurchaseBillFile).get(file_id)
+    if not f:
+        raise HTTPException(404, "File not found")
+    _log_bill_edit(db, f.bill_id, [f"Removed file: {f.file_name}"], current_user.id)
+    db.delete(f)
+    db.commit()
+    return {"ok": True}
 
 
 # ── single intake kept for backward compatibility ──────────────────────────
@@ -732,6 +974,7 @@ def delete_purchase(bill_id: int, db: Session = Depends(get_db),
         raise HTTPException(404, "Bill not found")
     for it in list(bill.lots):
         _delete_lot_cascade(db, it)
+    _delete_bill_children(db, bill.id)
     db.delete(bill)
     db.commit()
     return {"ok": True}
