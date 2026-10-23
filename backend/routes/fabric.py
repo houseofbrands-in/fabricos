@@ -191,8 +191,19 @@ class PurchaseIn(BaseModel):
     supplier_id: Optional[int] = None
     supplier_name: Optional[str] = ""
     invoice_number: Optional[str] = ""
+    purchase_date: Optional[str] = None     # "YYYY-MM-DD" from the bill; blank = today
     notes: Optional[str] = ""
     lines: List[PurchaseLine]
+
+
+def _parse_date(v):
+    """'YYYY-MM-DD' (or ISO datetime) -> datetime; blank/bad -> None."""
+    if not v:
+        return None
+    try:
+        return datetime.strptime(str(v)[:10], "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "Bill date is not valid")
 
 
 @router.post("/purchase")
@@ -216,6 +227,7 @@ def create_purchase(
         supplier_id=body.supplier_id,
         supplier_name=supplier_name,
         invoice_number=(body.invoice_number or "").strip(),
+        purchase_date=_parse_date(body.purchase_date) or datetime.utcnow(),
         notes=(body.notes or "").strip(),
         created_by=current_user.id,
     )

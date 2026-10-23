@@ -3,7 +3,7 @@ import Layout from "../components/Layout";
 import api from "../api";
 import { Package, ScanLine, CheckCircle, BarChart2 } from "lucide-react";
 
-const SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
+const SIZES = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL"];
 
 export default function Packing() {
   const [pending, setPending] = useState([]);

@@ -457,7 +457,8 @@ function FabricsTab({ fabrics, reload, isAdmin, suppliers, reloadSuppliers }) {
 /* ─────────────────────────── PURCHASE TAB (multi-fabric bill) ─────────────────────────── */
 function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSuppliers }) {
   const blankLine = { fabric_id: "", metres_received: "", num_rolls: "", cost_per_metre: "" };
-  const [bill, setBill] = useState({ supplier_id: "", invoice_number: "", notes: "" });
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const [bill, setBill] = useState({ supplier_id: "", invoice_number: "", purchase_date: today(), notes: "" });
   const [lines, setLines] = useState([{ ...blankLine }]);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
@@ -478,6 +479,7 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSup
       const { data } = await api.post("/fabric/purchase", {
         supplier_id: parseInt(bill.supplier_id),
         invoice_number: bill.invoice_number,
+        purchase_date: bill.purchase_date,
         notes: bill.notes,
         lines: valid.map(l => ({
           fabric_id: parseInt(l.fabric_id),
@@ -487,7 +489,7 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSup
         })),
       });
       setMsg(`✅ Bill saved! ${data.lots_created} lot(s) created: ${data.lot_codes.join(", ")}. Now do Fabric QC on them.`);
-      setBill({ supplier_id: "", invoice_number: "", notes: "" });
+      setBill({ supplier_id: "", invoice_number: "", purchase_date: today(), notes: "" });
       setLines([{ ...blankLine }]);
       reload();
     } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
@@ -510,6 +512,11 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSup
             <label style={S.label}>Invoice No.</label>
             <input style={S.input} placeholder="e.g. INV-5501" value={bill.invoice_number}
               onChange={e => setBill(b => ({ ...b, invoice_number: e.target.value }))} />
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <label style={S.label}>Bill Date</label>
+            <input style={S.input} type="date" value={bill.purchase_date}
+              onChange={e => setBill(b => ({ ...b, purchase_date: e.target.value }))} />
           </div>
 
           <label style={S.label}>Fabrics on this bill</label>
