@@ -495,6 +495,17 @@ class PackingLog(Base):
     packed_at = Column(DateTime, default=datetime.utcnow)
     inwarded = Column(Boolean, default=False)
     inwarded_at = Column(DateTime, nullable=True)
+    # ── warehouse take-in progress + shortages (blank on older rows) ──
+    received_json = Column(Text)                    # {"L": 18} pieces taken into stock so far
+    short_json = Column(Text)                       # {"L": 2}  pieces closed as short
+    short_qty = Column(Integer, default=0)
+    short_reason = Column(String(200))
+    short_status = Column(String(20))               # open | found | resolved
+    short_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    short_at = Column(DateTime, nullable=True)
+    short_resolved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    short_resolved_at = Column(DateTime, nullable=True)
+    short_resolved_note = Column(Text)
 
 
 class WarehouseProductionMap(Base):

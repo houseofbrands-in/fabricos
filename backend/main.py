@@ -90,6 +90,16 @@ LIGHT_MIGRATIONS = [
     ("quotations", "image_url", "VARCHAR(500)"),
     ("bundles", "size", "VARCHAR(20)"),
     ("purchase_bills", "gst_pct", "NUMERIC(6,2) DEFAULT 0"),
+    ("packing_logs", "received_json", "TEXT"),
+    ("packing_logs", "short_json", "TEXT"),
+    ("packing_logs", "short_qty", "INTEGER DEFAULT 0"),
+    ("packing_logs", "short_reason", "VARCHAR(200)"),
+    ("packing_logs", "short_status", "VARCHAR(20)"),
+    ("packing_logs", "short_by", "INTEGER"),
+    ("packing_logs", "short_at", "TIMESTAMP"),
+    ("packing_logs", "short_resolved_by", "INTEGER"),
+    ("packing_logs", "short_resolved_at", "TIMESTAMP"),
+    ("packing_logs", "short_resolved_note", "TEXT"),
 ]
 
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import Layout from "../components/Layout";
 import api from "../api";
-import { Package, ScanLine, CheckCircle, BarChart2 } from "lucide-react";
+import { Package, ScanLine, CheckCircle, BarChart2, AlertTriangle } from "lucide-react";
 
 const SIZES = ["XS", "S", "M", "L", "XL", "XXL", "3XL", "4XL"];
 
@@ -14,12 +14,33 @@ export default function Packing() {
   const [cartonNo, setCartonNo] = useState("");
   const [msg, setMsg] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [view, setView] = useState("scan"); // scan | summary
+  const [view, setView] = useState("scan"); // scan | summary | shortages
+  const [shortages, setShortages] = useState([]);
+  const [shortMsg, setShortMsg] = useState(null);
   const scanRef = useRef(null);
 
   const loadData = () => {
     api.get("/packing/pending").then(r => setPending(r.data));
     api.get("/packing/summary").then(r => setSummary(r.data));
+    api.get("/packing/shortages").then(r => setShortages(r.data)).catch(() => setShortages([]));
+  };
+  const openShorts = shortages.filter(s => s.status === "open").length;
+
+  const resolveShort = async (row, action) => {
+    let note = "";
+    if (action === "found") {
+      note = window.prompt(`${row.short_qty} piece(s) of ${row.bundle_code} found — they'll go back to the warehouse's From Production list. Note (optional):`, "");
+      if (note === null) return;
+    } else {
+      note = window.prompt(`Write off ${row.short_qty} piece(s) of ${row.bundle_code}? Type a note (required), e.g. why they're lost:`, "");
+      if (note === null) return;
+      if (!note.trim()) { setShortMsg({ type: "error", text: "A note is required to write off" }); return; }
+    }
+    try {
+      await api.post(`/packing/shortages/${row.packing_id}/resolve`, { action, note });
+      setShortMsg({ type: "success", text: action === "found" ? `✅ ${row.bundle_code}: sent back to warehouse` : `✅ ${row.bundle_code}: written off` });
+      loadData();
+    } catch (e) { setShortMsg({ type: "error", text: e.response?.data?.detail || "Error" }); }
   };
   useEffect(() => { loadData(); }, []);
   useEffect(() => { if (!bundle) scanRef.current?.focus(); }, [bundle]);
@@ -73,7 +94,7 @@ export default function Packing() {
 
       {/* Tab toggle */}
       <div style={{ display: "flex", gap: 4, marginBottom: 20, background: "white", borderRadius: 12, padding: 4, boxShadow: "0 2px 8px rgba(0,0,0,0.05)", width: "fit-content" }}>
-        {[["scan", "Scan & Pack"], ["summary", "Packing Summary"]].map(([key, label]) => (
+        {[["scan", "Scan & Pack"], ["summary", "Packing Summary"], ["shortages", `Shortages${openShorts ? ` (${openShorts})` : ""}`]].map(([key, label]) => (
           <button key={key} onClick={() => setView(key)} style={{
             background: view === key ? "#1a1a2e" : "transparent",
             color: view === key ? "white" : "#6c757d",
@@ -273,6 +294,64 @@ export default function Packing() {
                       {summary.reduce((a, b) => a + b.total_pieces, 0)} pcs
                     </td>
                   </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+      {/* Shortages raised by the warehouse at take-in */}
+      {view === "shortages" && (
+        <div style={{ background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" }}>
+          <div style={{ background: "linear-gradient(135deg,#1a1a2e,#0f3460)", color: "white", padding: "14px 20px" }}>
+            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>
+              <AlertTriangle size={15} style={{ marginRight: 6 }} />Shortages from Warehouse ({openShorts} open)
+            </h3>
+          </div>
+          {shortMsg && (
+            <div style={{ margin: 16, background: shortMsg.type === "success" ? "#d1f5ea" : "#ffe0e3", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: shortMsg.type === "success" ? "#1b5e20" : "#b71c1c" }}>{shortMsg.text}</div>
+          )}
+          {shortages.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 48, color: "#adb5bd" }}>
+              <CheckCircle size={40} color="#1b5e20" style={{ opacity: 0.4 }} />
+              <p style={{ marginTop: 12, fontSize: 14 }}>No shortages — everything packed reached the warehouse</p>
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: "#f8f9fc" }}>
+                    {["When", "Bundle", "Design", "Carton", "Packed", "Short", "Reason", "Status", ""].map(h => (
+                      <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontSize: 12, fontWeight: 700, color: "#6c757d" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {shortages.map(r => (
+                    <tr key={r.packing_id} style={{ borderTop: "1px solid #f0f0f0", background: r.status === "open" ? "#fffdf3" : "white" }}>
+                      <td style={{ padding: "10px 12px" }}>{r.at ? new Date(r.at + "Z").toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}<div style={{ fontSize: 11, color: "#adb5bd" }}>by {r.by}</div></td>
+                      <td style={{ padding: "10px 12px", fontFamily: "monospace", fontWeight: 700 }}>{r.bundle_code}</td>
+                      <td style={{ padding: "10px 12px" }}>{r.design_code}<div style={{ fontSize: 11, color: "#6c757d" }}>{r.design_name}</div></td>
+                      <td style={{ padding: "10px 12px" }}>{r.carton_no || "—"}</td>
+                      <td style={{ padding: "10px 12px" }}>{r.packed_qty}</td>
+                      <td style={{ padding: "10px 12px", fontWeight: 800, color: "#b71c1c" }}>{r.short_qty}<div style={{ fontSize: 11, fontWeight: 400, color: "#6c757d" }}>{Object.entries(r.short_sizes || {}).map(([s, q]) => `${s}:${q}`).join(", ")}</div></td>
+                      <td style={{ padding: "10px 12px" }}>{r.reason}</td>
+                      <td style={{ padding: "10px 12px" }}>
+                        {r.status === "open" ? <span style={{ background: "#fff3cd", color: "#7a5b00", borderRadius: 20, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>Open</span>
+                          : r.status === "found" ? <span style={{ background: "#d1f5ea", color: "#1b5e20", borderRadius: 20, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>Found</span>
+                          : <span style={{ background: "#f1f3f5", color: "#495057", borderRadius: 20, padding: "2px 10px", fontSize: 12, fontWeight: 700 }}>Written off</span>}
+                        {r.resolved_by && <div style={{ fontSize: 11, color: "#6c757d", marginTop: 2 }}>{r.resolved_by}{r.resolved_note ? `: ${r.resolved_note}` : ""}</div>}
+                      </td>
+                      <td style={{ padding: "10px 12px", whiteSpace: "nowrap" }}>
+                        {r.status === "open" && (
+                          <>
+                            <button onClick={() => resolveShort(r, "found")} style={{ background: "#1b5e20", color: "white", border: "none", borderRadius: 8, padding: "6px 10px", fontWeight: 700, fontSize: 12, cursor: "pointer", marginRight: 6 }}>Found</button>
+                            <button onClick={() => resolveShort(r, "written_off")} style={{ background: "#f1f3f5", color: "#495057", border: "none", borderRadius: 8, padding: "6px 10px", fontWeight: 700, fontSize: 12, cursor: "pointer" }}>Write off</button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

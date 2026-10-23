@@ -139,3 +139,52 @@ def packing_summary(
         del row["sizes"]
         out.append(row)
     return out
+
+
+# ── shortages raised by the warehouse at take-in (packed N, fewer found) ──────
+@router.get("/shortages")
+def list_shortages(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles("packing", "admin")),
+):
+    from routes.warehouse import _short_dict
+    names = {u.id: u.name for u in db.query(User).all()}
+    logs = (db.query(PackingLog).filter(PackingLog.short_qty > 0)
+            .order_by(PackingLog.short_at.desc()).limit(500).all())
+    rows = [_short_dict(db, l, names) for l in logs]
+    rows.sort(key=lambda r: 0 if r["status"] == "open" else 1)   # open ones first
+    return rows
+
+
+class ShortResolve(BaseModel):
+    action: str          # found | written_off
+    note: str = ""
+
+
+@router.post("/shortages/{packing_id}/resolve")
+def resolve_shortage(
+    packing_id: int,
+    body: ShortResolve,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles("packing", "admin")),
+):
+    log = db.query(PackingLog).get(packing_id)
+    if not log or not log.short_qty:
+        raise HTTPException(404, "Shortage not found")
+    if log.short_status != "open":
+        raise HTTPException(400, "This shortage is already closed")
+    if body.action == "found":
+        # pieces turned up → send them back to the warehouse's From Production list
+        log.short_status = "found"
+        log.inwarded = False
+    elif body.action == "written_off":
+        if not body.note.strip():
+            raise HTTPException(400, "Add a note for the write-off")
+        log.short_status = "resolved"
+    else:
+        raise HTTPException(400, "Unknown action")
+    log.short_resolved_by = current_user.id
+    log.short_resolved_at = datetime.utcnow()
+    log.short_resolved_note = body.note.strip()
+    db.commit()
+    return {"ok": True, "status": log.short_status}

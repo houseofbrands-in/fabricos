@@ -131,7 +131,7 @@ export default function Warehouse() {
       </div>
 
       {tab === "inward" && <InwardTab racks={racks} reload={loadAll} />}
-      {tab === "production" && <ProductionTab pending={production} skus={skus} reload={loadAll} />}
+      {tab === "production" && <ProductionTab pending={production} skus={skus} reload={loadAll} reloadSkus={loadSkus} />}
       {tab === "outward" && <OutwardTab templates={templates} reload={loadAll} />}
       {tab === "pick" && <PickTab racks={racks} reload={loadAll} />}
       {tab === "returns" && <ReturnsTab templates={templates} reload={loadAll} />}
@@ -1359,8 +1359,47 @@ function PickTab({ racks, reload }) {
   );
 }
 /* ─────────────────────────── FROM PRODUCTION (auto-inward) ─────────────────────────── */
-function ProductionTab({ pending, skus, reload }) {
-  const [state, setState] = useState({});   // packing_id -> { rack, lines: {size:{master_id,qty}} }
+const SHORT_REASONS = ["Missing", "Damaged", "Sample", "Miscount at packing", "Other"];
+const fmtDT = (iso) => iso ? new Date(iso + "Z").toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+
+// Small inline form to create a master SKU without leaving From Production.
+function NewSkuInline({ size, designCode, onCreated, onCancel }) {
+  const [f, setF] = useState({ sku_code: "", name: "", barcode: "" });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (!f.sku_code.trim()) { setErr("Type the SKU code"); return; }
+    setBusy(true); setErr("");
+    try {
+      const { data } = await api.post("/warehouse/skus", { ...f, size, design_code: designCode || "" });
+      onCreated(data);
+    } catch (e) { setErr(e.response?.data?.detail || "Could not create SKU"); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div style={{ border: "1px solid #e9ecef", background: "#fafbff", borderRadius: 10, padding: 10, marginTop: 6 }}>
+      <div style={{ fontSize: 11, color: "#6c757d", marginBottom: 6 }}>New warehouse SKU · size <b>{size}</b></div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+        <input style={{ ...S.input, padding: "6px 8px", fontSize: 13 }} placeholder="SKU code *" value={f.sku_code} onChange={e => setF(v => ({ ...v, sku_code: e.target.value }))} />
+        <input style={{ ...S.input, padding: "6px 8px", fontSize: 13 }} placeholder="Name (optional)" value={f.name} onChange={e => setF(v => ({ ...v, name: e.target.value }))} />
+        <input style={{ ...S.input, padding: "6px 8px", fontSize: 13 }} placeholder="Barcode (optional)" value={f.barcode} onChange={e => setF(v => ({ ...v, barcode: e.target.value }))} />
+      </div>
+      {err && <div style={{ fontSize: 12, color: "#b71c1c", marginTop: 4 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+        <button type="button" onClick={save} disabled={busy} style={{ ...S.btn, padding: "6px 12px", fontSize: 12 }}>{busy ? "Saving..." : "Create SKU"}</button>
+        <button type="button" onClick={onCancel} style={{ background: "none", border: "1px solid #dee2e6", borderRadius: 8, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function ProductionTab({ pending, skus, reload, reloadSkus }) {
+  const [view, setView] = useState("waiting");   // waiting | history
+  const [state, setState] = useState({});   // packing_id -> { rack, mode, reason, reasonText, lines: {size:{master_id,qty}} }
+  const [selected, setSelected] = useState({});   // packing_id -> true
+  const [bulkRack, setBulkRack] = useState("");
+  const [newSkuFor, setNewSkuFor] = useState(null);   // `${packing_id}|${size}`
+  const [history, setHistory] = useState(null);
   const [msg, setMsg] = useState("");
   const [busyId, setBusyId] = useState(null);
 
@@ -1368,18 +1407,27 @@ function ProductionTab({ pending, skus, reload }) {
     setState(prev => {
       const next = { ...prev };
       pending.forEach(p => {
-        if (!next[p.packing_id]) {
+        const key = `${p.packing_id}:${p.remaining_qty}`;   // reset a card when its remaining changes
+        if (!next[p.packing_id] || next[p.packing_id].key !== key) {
           const lines = {};
-          p.lines.forEach(l => { lines[l.size] = { master_id: l.suggested_master_id || "", qty: l.qty }; });
-          next[p.packing_id] = { rack: "", lines };
+          p.lines.forEach(l => { lines[l.size] = { master_id: (next[p.packing_id]?.lines?.[l.size]?.master_id) || l.suggested_master_id || "", qty: l.qty }; });
+          next[p.packing_id] = { key, rack: next[p.packing_id]?.rack || "", mode: "pending", reason: "Missing", reasonText: "", lines };
         }
       });
       Object.keys(next).forEach(k => { if (!pending.find(p => String(p.packing_id) === String(k))) delete next[k]; });
       return next;
     });
+    setSelected(sel => {
+      const next = {};
+      Object.keys(sel).forEach(k => { if (sel[k] && pending.find(p => String(p.packing_id) === String(k))) next[k] = true; });
+      return next;
+    });
   }, [pending]);
 
-  const setRack = (pid, v) => setState(s => ({ ...s, [pid]: { ...s[pid], rack: v } }));
+  const loadHistory = () => api.get("/warehouse/production/history").then(r => setHistory(r.data)).catch(() => setHistory({ inwards: [], shortages: [] }));
+  useEffect(() => { if (view === "history") loadHistory(); }, [view]);
+
+  const setCard = (pid, patch) => setState(s => ({ ...s, [pid]: { ...s[pid], ...patch } }));
   const setLine = (pid, size, field, v) => setState(s => ({ ...s, [pid]: { ...s[pid], lines: { ...s[pid].lines, [size]: { ...s[pid].lines[size], [field]: v } } } }));
 
   const optionsForSize = (size) => {
@@ -1388,85 +1436,257 @@ function ProductionTab({ pending, skus, reload }) {
     return matched.length ? matched : skus;
   };
 
+  const linesOf = (pid) => Object.entries(state[pid]?.lines || {})
+    .map(([size, v]) => ({ size, master_id: parseInt(v.master_id) || null, qty: parseInt(v.qty) || 0 }));
+
   const takeIn = async (p) => {
     const st = state[p.packing_id];
     if (!st) return;
-    if (!st.rack || !st.rack.trim()) { setMsg(`Scan / type a rack for ${p.bundle_code}`); return; }
-    const lines = Object.entries(st.lines)
-      .map(([size, v]) => ({ size, master_id: parseInt(v.master_id) || 0, qty: parseInt(v.qty) || 0 }))
-      .filter(l => l.qty > 0);
-    if (!lines.length) { setMsg("Nothing to take in"); return; }
-    if (lines.some(l => !l.master_id)) { setMsg("Pick a SKU for every size first"); return; }
+    const lines = linesOf(p.packing_id);
+    const units = lines.reduce((a, l) => a + l.qty, 0);
+    const shortLeft = p.remaining_qty - units;
+    const closing = shortLeft > 0 && st.mode === "short";
+    if (units > 0 && (!st.rack || !st.rack.trim())) { setMsg(`Scan / type a rack for ${p.bundle_code}`); return; }
+    if (units === 0 && !closing) { setMsg("Nothing to take in"); return; }
+    if (lines.some(l => l.qty > 0 && !l.master_id)) { setMsg("Pick a SKU for every size first"); return; }
+    const reason = st.reason === "Other" ? (st.reasonText || "").trim() : st.reason;
+    if (closing && !reason) { setMsg("Type the reason for the short pieces"); return; }
     setBusyId(p.packing_id); setMsg("");
     try {
-      await api.post("/warehouse/production/inward", { packing_id: p.packing_id, rack_code: st.rack, lines });
+      const { data } = await api.post("/warehouse/production/inward", {
+        packing_id: p.packing_id, rack_code: st.rack, lines: lines.filter(l => l.qty > 0),
+        mode: closing ? "short" : "pending", short_reason: closing ? reason : "",
+      });
+      setMsg(data.status === "pending" ? `✅ ${p.bundle_code}: ${data.inwarded_units} in · ${data.left} still pending`
+        : data.status === "short" ? `✅ ${p.bundle_code}: ${data.inwarded_units} in · ${data.left} closed as short (packing team notified)`
+        : `✅ ${p.bundle_code}: ${data.inwarded_units} pcs taken into stock`);
       reload();
     } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
     finally { setBusyId(null); }
   };
 
-  if (!pending.length) {
+  const selIds = Object.keys(selected).filter(k => selected[k]);
+  const takeSelected = async () => {
+    if (!bulkRack.trim()) { setMsg("Scan / type the rack for the selected bundles"); return; }
+    const items = selIds.map(pid => ({ packing_id: parseInt(pid), lines: linesOf(pid).filter(l => l.qty > 0) }));
+    setBusyId("bulk"); setMsg("");
+    try {
+      const { data } = await api.post("/warehouse/production/inward-bulk", { rack_code: bulkRack, items });
+      let t = `✅ ${data.done.length} bundle(s) · ${data.units} pcs onto rack ${data.rack_code}.`;
+      if (data.skipped.length) t += ` Skipped ${data.skipped.length}: ` + data.skipped.map(s => `${s.bundle_code} (${s.reason})`).join("; ");
+      setMsg(t);
+      setBulkRack("");
+      reload();
+    } catch (e) { setMsg(e.response?.data?.detail || "Error"); }
+    finally { setBusyId(null); }
+  };
+
+  // group bundles by carton (blank carton → its own group at the end)
+  const groups = [];
+  const byCarton = {};
+  pending.forEach(p => {
+    const c = (p.carton_no || "").trim();
+    if (!byCarton[c]) { byCarton[c] = []; groups.push(c); }
+    byCarton[c].push(p);
+  });
+  groups.sort((a, b) => (a === "") - (b === "") || a.localeCompare(b, undefined, { numeric: true }));
+
+  const toggle = (pid) => setSelected(s => ({ ...s, [pid]: !s[pid] }));
+  const selectCarton = (c) => setSelected(s => {
+    const all = byCarton[c].every(p => s[p.packing_id]);
+    const next = { ...s };
+    byCarton[c].forEach(p => { next[p.packing_id] = !all; });
+    return next;
+  });
+
+  const viewBtn = (k, label) => (
+    <button key={k} onClick={() => setView(k)} style={{ background: view === k ? "#283593" : "white", color: view === k ? "white" : "#283593", border: "1.5px solid #283593", borderRadius: 10, padding: "6px 14px", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>{label}</button>
+  );
+
+  const card = (p) => {
+    const st = state[p.packing_id] || { rack: "", mode: "pending", reason: "Missing", reasonText: "", lines: {} };
+    const units = Object.values(st.lines).reduce((a, v) => a + (parseInt(v.qty) || 0), 0);
+    const shortLeft = p.remaining_qty - units;
     return (
-      <div style={S.card}>
-        <div style={S.header}><h3 style={S.h3}><Factory size={15} /> From Production</h3></div>
-        <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No packed bundles waiting to come into stock. Packed bundles from the floor will show up here.</div>
+      <div key={p.packing_id} style={{ ...S.card, marginBottom: 12, outline: selected[p.packing_id] ? "2px solid #3949ab" : "none" }}>
+        <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!selected[p.packing_id]} onChange={() => toggle(p.packing_id)} style={{ width: 16, height: 16 }} />
+            <h3 style={S.h3}><Factory size={15} /> {p.design_code}{p.design_name ? ` · ${p.design_name}` : ""}</h3>
+          </label>
+          <span style={{ fontSize: 12, opacity: 0.9 }}>
+            Bundle {p.bundle_code} · packed {p.total_qty} pcs{p.received_qty > 0 ? ` · ${p.received_qty} already in` : ""} · <b>{p.remaining_qty} to take in</b>
+            {p.found_after_short ? " · found after short" : ""}
+          </span>
+        </div>
+        <div style={{ padding: 16 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 14 }}>
+            <div style={{ flex: "1 1 220px" }}>
+              <label style={S.label}>Scan / type rack to place stock</label>
+              <input style={S.input} value={st.rack || ""} onChange={e => setCard(p.packing_id, { rack: e.target.value })} placeholder="e.g. A1" />
+            </div>
+            <button onClick={() => takeIn(p)} disabled={busyId === p.packing_id} style={{ ...S.btn, background: "#1b5e20", opacity: busyId === p.packing_id ? 0.7 : 1 }}>
+              {busyId === p.packing_id ? "Taking in..." : shortLeft > 0 && st.mode === "short" ? (units > 0 ? `Take in ${units} · close ${shortLeft} short` : `Close ${shortLeft} as short`) : "Take into stock"}
+            </button>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ background: "#f8f9fc" }}>{["Size", "Packed", "Already in", "Qty now", "Warehouse SKU (confirm / change)"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {p.lines.map(l => {
+                  const ln = st.lines[l.size] || { master_id: "", qty: l.qty };
+                  const opts = optionsForSize(l.size);
+                  const noSuggestion = !l.suggested_master_id;
+                  const skuKey = `${p.packing_id}|${l.size}`;
+                  return (
+                    <tr key={l.size} style={{ borderTop: "1px solid #f0f0f0", verticalAlign: "top" }}>
+                      <td style={S.td}><span style={S.pill("#e8eaf6", "#283593")}>{l.size}</span></td>
+                      <td style={S.td}>{l.packed_qty}</td>
+                      <td style={S.td}>{l.received_qty}</td>
+                      <td style={{ ...S.td, width: 90 }}><input style={{ ...S.input, padding: "5px 8px", width: 70 }} type="number" min="0" max={l.qty} value={ln.qty} onChange={e => setLine(p.packing_id, l.size, "qty", e.target.value)} /></td>
+                      <td style={S.td}>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <select style={{ ...S.input, padding: "7px 8px", borderColor: ln.master_id ? "#dee2e6" : "#e94560" }} value={ln.master_id} onChange={e => setLine(p.packing_id, l.size, "master_id", e.target.value)}>
+                            <option value="">— pick SKU —</option>
+                            {opts.map(s => <option key={s.id} value={s.id}>{s.sku_code}{s.name ? ` · ${s.name}` : ""}</option>)}
+                          </select>
+                          <button type="button" onClick={() => setNewSkuFor(newSkuFor === skuKey ? null : skuKey)} style={{ background: "#eef2ff", color: "#3730a3", border: "none", borderRadius: 10, padding: "0 10px", fontWeight: 700, cursor: "pointer", fontSize: 12, whiteSpace: "nowrap" }}>+ New SKU</button>
+                        </div>
+                        {noSuggestion && !ln.master_id && <div style={{ fontSize: 11, color: "#e94560", marginTop: 3 }}>No auto-match — pick once (or create one) and it'll be remembered.</div>}
+                        {newSkuFor === skuKey && (
+                          <NewSkuInline size={l.size} designCode={p.design_code}
+                            onCancel={() => setNewSkuFor(null)}
+                            onCreated={async (sku) => { await reloadSkus(); setLine(p.packing_id, l.size, "master_id", String(sku.id)); setNewSkuFor(null); setMsg(`✅ SKU ${sku.sku_code} created`); }} />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {shortLeft > 0 && (
+            <div style={{ marginTop: 12, background: "#fff8e1", border: "1px solid #ffe69c", borderRadius: 10, padding: 12, fontSize: 13 }}>
+              <div style={{ fontWeight: 700, color: "#7a5b00", marginBottom: 6 }}>{shortLeft} piece(s) not being taken in now. What about them?</div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, cursor: "pointer" }}>
+                <input type="radio" checked={st.mode !== "short"} onChange={() => setCard(p.packing_id, { mode: "pending" })} /> Keep them pending here (they may still come)
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="radio" checked={st.mode === "short"} onChange={() => setCard(p.packing_id, { mode: "short" })} /> Close as short — packing team will see it
+              </label>
+              {st.mode === "short" && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  <select style={{ ...S.input, width: 200, padding: "7px 8px" }} value={st.reason} onChange={e => setCard(p.packing_id, { reason: e.target.value })}>
+                    {SHORT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                  {st.reason === "Other" && <input style={{ ...S.input, flex: 1, padding: "7px 8px" }} placeholder="Type the reason" value={st.reasonText} onChange={e => setCard(p.packing_id, { reasonText: e.target.value })} />}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     );
-  }
+  };
 
   return (
     <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        {viewBtn("waiting", `Waiting (${pending.length})`)}
+        {viewBtn("history", "History")}
+      </div>
       <Msg msg={msg} />
-      <p style={{ color: "#6c757d", fontSize: 13, marginTop: 0, marginBottom: 16 }}>
-        These bundles were packed on the floor. Confirm the SKU for each size (auto-suggested), scan a rack, and take them into stock. Your SKU choice is remembered for next time.
-      </p>
-      {pending.map(p => {
-        const st = state[p.packing_id] || { rack: "", lines: {} };
-        return (
-          <div key={p.packing_id} style={{ ...S.card, marginBottom: 16 }}>
-            <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-              <h3 style={S.h3}><Factory size={15} /> {p.design_code}{p.design_name ? ` · ${p.design_name}` : ""}</h3>
-              <span style={{ fontSize: 12, opacity: 0.9 }}>Bundle {p.bundle_code} · {p.total_qty} pcs{p.carton_no ? ` · carton ${p.carton_no}` : ""}</span>
+
+      {view === "waiting" && (pending.length === 0 ? (
+        <div style={S.card}>
+          <div style={S.header}><h3 style={S.h3}><Factory size={15} /> From Production</h3></div>
+          <div style={{ textAlign: "center", padding: 48, color: "#adb5bd", fontSize: 14 }}>No packed bundles waiting to come into stock. Packed bundles from the floor will show up here.</div>
+        </div>
+      ) : (
+        <>
+          <p style={{ color: "#6c757d", fontSize: 13, marginTop: 0, marginBottom: 12 }}>
+            Confirm the SKU for each size (auto-suggested, or create one with + New SKU), scan a rack, and take them in. Tick several bundles — or a whole carton — to put them all on one rack. If fewer pieces arrived, keep the rest pending or close them as short.
+          </p>
+          {selIds.length > 0 && (
+            <div style={{ ...S.card, padding: 12, marginBottom: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", position: "sticky", top: 64, zIndex: 5, border: "2px solid #3949ab" }}>
+              <b style={{ fontSize: 13 }}>{selIds.length} bundle(s) selected · {selIds.reduce((a, pid) => a + linesOf(pid).reduce((x, l) => x + l.qty, 0), 0)} pcs</b>
+              <input style={{ ...S.input, width: 200 }} value={bulkRack} onChange={e => setBulkRack(e.target.value)} placeholder="Scan / type rack" />
+              <button onClick={takeSelected} disabled={busyId === "bulk"} style={{ ...S.btn, background: "#1b5e20", opacity: busyId === "bulk" ? 0.7 : 1 }}>{busyId === "bulk" ? "Taking in..." : "Take selected into stock"}</button>
+              <button onClick={() => setSelected({})} style={{ background: "none", border: "1px solid #dee2e6", borderRadius: 10, padding: "10px 14px", cursor: "pointer", fontSize: 13 }}>Clear</button>
             </div>
-            <div style={{ padding: 16 }}>
-              <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 14 }}>
-                <div style={{ flex: "1 1 220px" }}>
-                  <label style={S.label}>Scan / type rack to place stock</label>
-                  <input style={S.input} value={st.rack || ""} onChange={e => setRack(p.packing_id, e.target.value)} placeholder="e.g. A1" />
-                </div>
-                <button onClick={() => takeIn(p)} disabled={busyId === p.packing_id} style={{ ...S.btn, background: "#1b5e20", opacity: busyId === p.packing_id ? 0.7 : 1 }}>
-                  {busyId === p.packing_id ? "Taking in..." : "Take into stock"}
+          )}
+          {groups.map(c => (
+            <div key={c || "_none"} style={{ marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "6px 2px 8px" }}>
+                <span style={{ fontWeight: 800, fontSize: 13, color: "#283593" }}>{c ? `Carton ${c}` : "No carton no."} · {byCarton[c].length} bundle(s)</span>
+                <button onClick={() => selectCarton(c)} style={{ background: "#eef2ff", color: "#3730a3", border: "none", borderRadius: 8, padding: "5px 10px", fontWeight: 700, fontSize: 12, cursor: "pointer" }}>
+                  {byCarton[c].every(p => selected[p.packing_id]) ? "Unselect" : c ? "Select whole carton" : "Select all"}
                 </button>
               </div>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead><tr style={{ background: "#f8f9fc" }}>{["Size", "Qty", "Warehouse SKU (confirm / change)"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
-                  <tbody>
-                    {p.lines.map(l => {
-                      const ln = st.lines[l.size] || { master_id: "", qty: l.qty };
-                      const opts = optionsForSize(l.size);
-                      const noSuggestion = !l.suggested_master_id;
-                      return (
-                        <tr key={l.size} style={{ borderTop: "1px solid #f0f0f0" }}>
-                          <td style={S.td}><span style={S.pill("#e8eaf6", "#283593")}>{l.size}</span></td>
-                          <td style={{ ...S.td, width: 90 }}><input style={{ ...S.input, padding: "5px 8px", width: 70 }} type="number" min="0" value={ln.qty} onChange={e => setLine(p.packing_id, l.size, "qty", e.target.value)} /></td>
+              {byCarton[c].map(card)}
+            </div>
+          ))}
+        </>
+      ))}
+
+      {view === "history" && (
+        !history ? <div style={{ padding: 24, color: "#adb5bd" }}>Loading…</div> : (
+          <>
+            <div style={{ ...S.card, marginBottom: 16 }}>
+              <div style={S.header}><h3 style={S.h3}><Factory size={15} /> Taken in from production ({history.inwards.length})</h3></div>
+              {history.inwards.length === 0 ? <div style={{ textAlign: "center", padding: 32, color: "#adb5bd", fontSize: 14 }}>Nothing taken in yet</div> : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr style={{ background: "#f8f9fc" }}>{["When", "Bundle", "Design", "SKU", "Size", "Qty", "Rack", "By"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {history.inwards.map(r => (
+                        <tr key={r.id} style={{ borderTop: "1px solid #f0f0f0" }}>
+                          <td style={S.td}>{fmtDT(r.at)}</td>
+                          <td style={{ ...S.td, fontFamily: "monospace" }}>{r.bundle_code}</td>
+                          <td style={S.td}>{r.design_code}</td>
+                          <td style={{ ...S.td, fontFamily: "monospace" }}>{r.sku_code}</td>
+                          <td style={S.td}>{r.size}</td>
+                          <td style={{ ...S.td, fontWeight: 700 }}>{r.qty}</td>
+                          <td style={S.td}>{r.rack_code}</td>
+                          <td style={S.td}>{r.by}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div style={S.card}>
+              <div style={S.header}><h3 style={S.h3}><AlertTriangle size={15} /> Shortages ({history.shortages.length})</h3></div>
+              {history.shortages.length === 0 ? <div style={{ textAlign: "center", padding: 32, color: "#adb5bd", fontSize: 14 }}>No shortages recorded</div> : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr style={{ background: "#f8f9fc" }}>{["When", "Bundle", "Design", "Short", "Reason", "By", "Status"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {history.shortages.map(r => (
+                        <tr key={r.packing_id} style={{ borderTop: "1px solid #f0f0f0" }}>
+                          <td style={S.td}>{fmtDT(r.at)}</td>
+                          <td style={{ ...S.td, fontFamily: "monospace" }}>{r.bundle_code}</td>
+                          <td style={S.td}>{r.design_code}</td>
+                          <td style={{ ...S.td, fontWeight: 700, color: "#b71c1c" }}>{r.short_qty} {Object.keys(r.short_sizes || {}).length ? `(${Object.entries(r.short_sizes).map(([s, q]) => `${s}:${q}`).join(", ")})` : ""}</td>
+                          <td style={S.td}>{r.reason}</td>
+                          <td style={S.td}>{r.by}</td>
                           <td style={S.td}>
-                            <select style={{ ...S.input, padding: "7px 8px", borderColor: ln.master_id ? "#dee2e6" : "#e94560" }} value={ln.master_id} onChange={e => setLine(p.packing_id, l.size, "master_id", e.target.value)}>
-                              <option value="">— pick SKU —</option>
-                              {opts.map(s => <option key={s.id} value={s.id}>{s.sku_code}{s.name ? ` · ${s.name}` : ""}</option>)}
-                            </select>
-                            {noSuggestion && <div style={{ fontSize: 11, color: "#e94560", marginTop: 3 }}>No auto-match — pick once and it'll be remembered.</div>}
+                            {r.status === "open" ? <span style={S.pill("#fff3cd", "#7a5b00")}>Open</span>
+                              : r.status === "found" ? <span style={S.pill("#d1f5ea", "#1b5e20")}>Found</span>
+                              : <span style={S.pill("#f1f3f5", "#495057")}>Written off</span>}
+                            {r.resolved_note && <div style={{ fontSize: 11, color: "#6c757d", marginTop: 2 }}>{r.resolved_by}: {r.resolved_note}</div>}
                           </td>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-          </div>
-        );
-      })}
+          </>
+        )
+      )}
     </div>
   );
 }

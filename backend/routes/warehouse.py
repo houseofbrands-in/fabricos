@@ -1003,6 +1003,23 @@ def suggest_master_id(db, design, size):
     return None, None
 
 
+def _jload(v):
+    try:
+        return json.loads(v) if v else {}
+    except ValueError:
+        return {}
+
+
+def production_remaining(log):
+    """Per-size pieces of a packed bundle still to come into stock.
+    packed − already taken in − closed as short (a short marked 'found' comes back)."""
+    sizes = _jload(log.sizes_json)
+    got = _jload(log.received_json)
+    short = _jload(log.short_json) if log.short_status in ("open", "resolved") else {}
+    return {size: max(0, int(qty or 0) - int(got.get(size, 0) or 0) - int(short.get(size, 0) or 0))
+            for size, qty in sizes.items()}
+
+
 @router.get("/production/pending")
 def production_pending(db: Session = Depends(get_db),
                        current_user: User = Depends(wh_admin)):
@@ -1014,21 +1031,28 @@ def production_pending(db: Session = Depends(get_db),
         design = db.query(Design).get(log.design_id) if log.design_id else None
         if not design:
             continue
-        try:
-            sizes = json.loads(log.sizes_json) if log.sizes_json else {}
-        except ValueError:
-            sizes = {}
+        sizes = _jload(log.sizes_json)
+        got = _jload(log.received_json)
+        rem = production_remaining(log)
         lines = []
         for size, qty in sizes.items():
+            if rem.get(size, 0) <= 0:
+                continue
             mid, scode = suggest_master_id(db, design, size)
-            lines.append({"size": size, "qty": int(qty),
+            lines.append({"size": size, "qty": rem[size], "packed_qty": int(qty or 0),
+                          "received_qty": int(got.get(size, 0) or 0),
                           "suggested_master_id": mid, "suggested_sku": scode})
+        if not lines:
+            continue
         out.append({
             "packing_id": log.id, "bundle_id": log.bundle_id,
             "bundle_code": bundle.bundle_code if bundle else "—",
             "design_id": design.id, "design_code": design.design_code,
             "design_name": design.design_name, "carton_no": log.carton_no,
             "total_qty": log.total_qty,
+            "remaining_qty": sum(rem.values()),
+            "received_qty": sum(int(v or 0) for v in got.values()),
+            "found_after_short": log.short_status == "found",
             "packed_at": log.packed_at.isoformat() if log.packed_at else None,
             "lines": lines,
         })
@@ -1037,45 +1061,65 @@ def production_pending(db: Session = Depends(get_db),
 
 class ProdLine(BaseModel):
     size: str
-    master_id: int
+    master_id: Optional[int] = None
     qty: int
 
 
 class ProdInwardIn(BaseModel):
     packing_id: int
-    rack_code: str
+    rack_code: Optional[str] = ""
     lines: List[ProdLine]
+    mode: str = "pending"            # pending = leave the rest waiting | short = close the rest as short
+    short_reason: Optional[str] = ""
 
 
-@router.post("/production/inward")
-def production_inward(body: ProdInwardIn, db: Session = Depends(get_db),
-                      current_user: User = Depends(wh_admin)):
-    log = db.query(PackingLog).get(body.packing_id)
-    if not log:
-        raise HTTPException(404, "Packing record not found")
+def _find_rack(db, code):
+    code = (code or "").strip()
+    if not code:
+        return None
+    rack = db.query(WarehouseRack).filter(WarehouseRack.normalized_code == norm(code)).first()
+    if not rack:
+        rack = db.query(WarehouseRack).filter(WarehouseRack.barcode == code).first()
+    if not rack:
+        raise HTTPException(404, f"Rack '{code}' not found")
+    return rack
+
+
+def _inward_packing(db, log, rack, lines, mode, short_reason, user):
+    """Take (part of) one packed bundle into stock. Does NOT commit."""
     if log.inwarded:
         raise HTTPException(400, "This bundle is already in stock")
-    rn = norm(body.rack_code)
-    rack = db.query(WarehouseRack).filter(WarehouseRack.normalized_code == rn).first()
-    if not rack:
-        rack = db.query(WarehouseRack).filter(WarehouseRack.barcode == body.rack_code.strip()).first()
-    if not rack:
-        raise HTTPException(404, f"Rack '{body.rack_code}' not found")
+    rem = production_remaining(log)
+    got = _jload(log.received_json)
+    taken = {}
+    for ln in lines:
+        if ln.qty < 0:
+            raise HTTPException(400, f"Size {ln.size}: quantity can't be negative")
+        if ln.qty == 0:
+            continue
+        if ln.size not in rem:
+            raise HTTPException(400, f"Size {ln.size} is not on this bundle")
+        if taken.get(ln.size, 0) + ln.qty > rem[ln.size]:
+            raise HTTPException(400, f"Size {ln.size}: only {rem[ln.size]} piece(s) left to take in on this bundle")
+        taken[ln.size] = taken.get(ln.size, 0) + ln.qty
+    units = sum(taken.values())
+    if units == 0 and mode != "short":
+        raise HTTPException(400, "Nothing to take in")
+    if units > 0 and not rack:
+        raise HTTPException(400, "Scan / type a rack first")
 
     bundle = db.query(Bundle).get(log.bundle_id) if log.bundle_id else None
     ref = f"Production {bundle.bundle_code}" if bundle else "Production"
-    units = 0
-    for ln in body.lines:
+    for ln in lines:
         if ln.qty <= 0:
             continue
-        master = db.query(WarehouseSku).get(ln.master_id)
+        master = db.query(WarehouseSku).get(ln.master_id) if ln.master_id else None
         if not master:
             raise HTTPException(400, f"SKU for size {ln.size} not found — pick a valid SKU")
         db.add(WarehouseMovement(
             master_id=master.id, rack_id=rack.id, bucket="sellable", qty=ln.qty,
             move_type="inward", source="production", reference=ref,
-            created_by=current_user.id))
-        units += ln.qty
+            created_by=user.id))
         # remember the mapping design+size → master
         existing = (db.query(WarehouseProductionMap)
                     .filter_by(design_id=log.design_id, size=ln.size).first())
@@ -1084,7 +1128,143 @@ def production_inward(body: ProdInwardIn, db: Session = Depends(get_db),
         else:
             db.add(WarehouseProductionMap(design_id=log.design_id, size=ln.size,
                                           master_id=master.id))
-    log.inwarded = True
+        got[ln.size] = int(got.get(ln.size, 0) or 0) + ln.qty
+    log.received_json = json.dumps(got)
+
+    left = {s: rem[s] - taken.get(s, 0) for s in rem if rem[s] - taken.get(s, 0) > 0}
+    left_total = sum(left.values())
+    status = "done"
+    if left_total > 0:
+        if mode == "short":
+            reason = (short_reason or "").strip()
+            if not reason:
+                raise HTTPException(400, "Give a reason for the short pieces")
+            log.short_json = json.dumps(left)
+            log.short_qty = left_total
+            log.short_reason = reason
+            log.short_status = "open"
+            log.short_by = user.id
+            log.short_at = datetime.utcnow()
+            log.short_resolved_by = None
+            log.short_resolved_at = None
+            log.short_resolved_note = None
+            status = "short"
+        else:
+            status = "pending"
+    if status != "pending":
+        log.inwarded = True
     log.inwarded_at = datetime.utcnow()
+    return {"units": units, "left": left_total, "status": status,
+            "bundle_code": bundle.bundle_code if bundle else "—"}
+
+
+@router.post("/production/inward")
+def production_inward(body: ProdInwardIn, db: Session = Depends(get_db),
+                      current_user: User = Depends(wh_admin)):
+    log = db.query(PackingLog).get(body.packing_id)
+    if not log:
+        raise HTTPException(404, "Packing record not found")
+    rack = _find_rack(db, body.rack_code)
+    res = _inward_packing(db, log, rack, body.lines, body.mode, body.short_reason, current_user)
     db.commit()
-    return {"ok": True, "inwarded_units": units, "rack_code": rack.code}
+    return {"ok": True, "inwarded_units": res["units"], "left": res["left"],
+            "status": res["status"], "rack_code": rack.code if rack else None}
+
+
+class ProdBulkItem(BaseModel):
+    packing_id: int
+    lines: List[ProdLine]
+
+
+class ProdBulkIn(BaseModel):
+    rack_code: str
+    items: List[ProdBulkItem]
+
+
+@router.post("/production/inward-bulk")
+def production_inward_bulk(body: ProdBulkIn, db: Session = Depends(get_db),
+                           current_user: User = Depends(wh_admin)):
+    """Several packed bundles onto ONE rack. Any bundle that can't go in
+    (e.g. a size with no SKU picked) is skipped and reported — never guessed."""
+    rack = _find_rack(db, body.rack_code)
+    if not rack:
+        raise HTTPException(400, "Scan / type a rack first")
+    done, skipped, units = [], [], 0
+    for it in body.items:
+        log = db.query(PackingLog).get(it.packing_id)
+        if not log:
+            skipped.append({"packing_id": it.packing_id, "bundle_code": "—", "reason": "Packing record not found"})
+            continue
+        bundle = db.query(Bundle).get(log.bundle_id) if log.bundle_id else None
+        code = bundle.bundle_code if bundle else "—"
+        missing = [ln.size for ln in it.lines if ln.qty > 0 and not ln.master_id]
+        if missing:
+            skipped.append({"packing_id": it.packing_id, "bundle_code": code,
+                            "reason": f"No SKU picked for size {', '.join(missing)}"})
+            continue
+        try:
+            with db.begin_nested():
+                res = _inward_packing(db, log, rack, it.lines, "pending", "", current_user)
+            done.append({"packing_id": it.packing_id, "bundle_code": code,
+                         "units": res["units"], "left": res["left"]})
+            units += res["units"]
+        except HTTPException as e:
+            skipped.append({"packing_id": it.packing_id, "bundle_code": code, "reason": e.detail})
+    db.commit()
+    return {"ok": True, "rack_code": rack.code, "units": units, "done": done, "skipped": skipped}
+
+
+@router.get("/production/history")
+def production_history(limit: int = 300, db: Session = Depends(get_db),
+                       current_user: User = Depends(wh_admin)):
+    """What came into stock from production (when, which SKU, rack, who) + shortages."""
+    names = {u.id: u.name for u in db.query(User).all()}
+    moves = (db.query(WarehouseMovement)
+             .filter(WarehouseMovement.source == "production",
+                     WarehouseMovement.move_type == "inward")
+             .order_by(WarehouseMovement.created_at.desc())
+             .limit(max(1, min(limit, 2000))).all())
+    codes = {(m.reference or "").replace("Production ", "", 1) for m in moves}
+    bundles = {b.bundle_code: b for b in db.query(Bundle).filter(Bundle.bundle_code.in_(codes)).all()} if codes else {}
+    inwards = []
+    for m in moves:
+        code = (m.reference or "").replace("Production ", "", 1)
+        b = bundles.get(code)
+        inwards.append({
+            "id": m.id,
+            "at": m.created_at.isoformat() if m.created_at else None,
+            "bundle_code": code or "—",
+            "design_code": b.design.design_code if b and b.design else "—",
+            "sku_code": m.master.sku_code if m.master else "—",
+            "size": m.master.size if m.master else "",
+            "qty": m.qty,
+            "rack_code": m.rack.code if m.rack else "—",
+            "by": names.get(m.created_by, "—"),
+        })
+    shorts = []
+    for log in (db.query(PackingLog).filter(PackingLog.short_qty > 0)
+                .order_by(PackingLog.short_at.desc()).limit(500).all()):
+        shorts.append(_short_dict(db, log, names))
+    return {"inwards": inwards, "shortages": shorts}
+
+
+def _short_dict(db, log, names):
+    bundle = db.query(Bundle).get(log.bundle_id) if log.bundle_id else None
+    design = db.query(Design).get(log.design_id) if log.design_id else None
+    return {
+        "packing_id": log.id,
+        "bundle_code": bundle.bundle_code if bundle else "—",
+        "design_code": design.design_code if design else "—",
+        "design_name": design.design_name if design else "",
+        "carton_no": log.carton_no,
+        "packed_qty": log.total_qty,
+        "short_qty": log.short_qty or 0,
+        "short_sizes": _jload(log.short_json),
+        "reason": log.short_reason,
+        "status": log.short_status,
+        "by": names.get(log.short_by, "—"),
+        "at": log.short_at.isoformat() if log.short_at else None,
+        "resolved_by": names.get(log.short_resolved_by, "") if log.short_resolved_by else "",
+        "resolved_at": log.short_resolved_at.isoformat() if log.short_resolved_at else None,
+        "resolved_note": log.short_resolved_note or "",
+    }
