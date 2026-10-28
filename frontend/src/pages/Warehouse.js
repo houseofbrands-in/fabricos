@@ -208,7 +208,7 @@ function InwardTab({ racks, reload }) {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(320px,440px) 1fr", gap: 20, alignItems: "start" }}>
+    <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(320px,440px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={S.card}>
         <div style={S.header}><h3 style={S.h3}><ScanLine size={15} /> Inward — Scan to Rack</h3></div>
@@ -340,8 +340,8 @@ function StockTab({ stock }) {
     <div style={S.card}>
       <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <h3 style={S.h3}><Boxes size={15} /> Live Stock ({rows.length}{ql ? ` of ${stock.skus.length}` : ""} SKUs)</h3>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search SKU, name, size, rack…" style={{ border: "none", borderRadius: 8, padding: "7px 12px", fontSize: 13, width: 240, maxWidth: "100%", outline: "none" }} />
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flex: "1 1 260px", justifyContent: "flex-end", minWidth: 0 }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search SKU, name, size, rack…" style={{ border: "none", borderRadius: 8, padding: "7px 12px", fontSize: 13, width: 240, minWidth: 0, flex: "0 1 240px", outline: "none" }} />
           <button onClick={downloadSheet} disabled={!stock.skus.length} style={{ background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.3)", color: "white", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}><Download size={13} /> Download{ql ? " (filtered)" : ""}</button>
         </div>
       </div>
@@ -465,7 +465,7 @@ function SkusTab({ skus, reload, isAdmin }) {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(280px,360px) 1fr", gap: 20, alignItems: "start" }}>
+    <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(280px,360px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         <div style={S.card}>
           <div style={S.header}><h3 style={S.h3}><Plus size={15} /> New Master SKU</h3></div>
@@ -641,7 +641,7 @@ function RacksTab({ racks, reload, isAdmin }) {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(260px,340px) 1fr", gap: 20, alignItems: "start" }}>
+    <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(260px,340px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={S.card}>
         <div style={S.header}><h3 style={S.h3}><Plus size={15} /> New Rack</h3></div>
         <form onSubmit={submit} style={{ padding: 20 }}>
@@ -1035,7 +1035,7 @@ function TemplatesTab({ templates, reload, isAdmin }) {
   );
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,420px) 1fr", gap: 20, alignItems: "start" }}>
+    <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(300px,420px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={S.card}>
         <div style={S.header}><h3 style={S.h3}><SlidersHorizontal size={15} /> {editId ? "Edit Template" : "New Marketplace Template"}</h3></div>
         <form onSubmit={submit} style={{ padding: 20 }}>
@@ -1189,7 +1189,7 @@ function LabelsTab({ skus, racks }) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+      <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
         <div style={S.card}>
           <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <h3 style={S.h3}><Layers size={15} /> SKU Labels</h3>
@@ -1289,7 +1289,7 @@ function PickTab({ racks, reload }) {
   const picked = log.reduce((s, r) => s + r.picked, 0);
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(320px,440px) 1fr", gap: 20, alignItems: "start" }}>
+    <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(320px,440px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={S.card}>
         <div style={S.header}><h3 style={S.h3}><PackageMinus size={15} /> Scan Pick — Pull from Rack</h3></div>
         <div style={{ padding: 20 }}>
@@ -1530,7 +1530,7 @@ function ProductionTab({ pending, skus, reload, reloadSkus }) {
             </button>
           </div>
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table className="fx-rows" style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr style={{ background: "#f8f9fc" }}>{["Size", "Packed", "Already in", "Qty now", "Warehouse SKU (confirm / change)"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
               <tbody>
                 {p.lines.map(l => {
@@ -1541,10 +1541,10 @@ function ProductionTab({ pending, skus, reload, reloadSkus }) {
                   return (
                     <tr key={l.size} style={{ borderTop: "1px solid #f0f0f0", verticalAlign: "top" }}>
                       <td style={S.td}><span style={S.pill("#e8eaf6", "#283593")}>{l.size}</span></td>
-                      <td style={S.td}>{l.packed_qty}</td>
-                      <td style={S.td}>{l.received_qty}</td>
-                      <td style={{ ...S.td, width: 90 }}><input style={{ ...S.input, padding: "5px 8px", width: 70 }} type="number" min="0" max={l.qty} value={ln.qty} onChange={e => setLine(p.packing_id, l.size, "qty", e.target.value)} /></td>
-                      <td style={S.td}>
+                      <td style={S.td} data-label="Packed">{l.packed_qty}</td>
+                      <td style={S.td} data-label="Already in">{l.received_qty}</td>
+                      <td style={{ ...S.td, width: 90 }} data-label="Qty now"><input style={{ ...S.input, padding: "5px 8px", width: 70 }} type="number" min="0" max={l.qty} value={ln.qty} onChange={e => setLine(p.packing_id, l.size, "qty", e.target.value)} /></td>
+                      <td className="fx-full" style={S.td}>
                         <div style={{ display: "flex", gap: 6 }}>
                           <select style={{ ...S.input, padding: "7px 8px", borderColor: ln.master_id ? "#dee2e6" : "#e94560" }} value={ln.master_id} onChange={e => setLine(p.packing_id, l.size, "master_id", e.target.value)}>
                             <option value="">— pick SKU —</option>

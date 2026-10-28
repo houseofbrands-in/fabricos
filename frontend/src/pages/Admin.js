@@ -203,7 +203,7 @@ export default function Admin() {
 
       {/* Users Tab */}
       {tab === "users" && (
-        <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 20, alignItems: "start" }}>
+        <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 20, alignItems: "start" }}>
           <div style={{ background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" }}>
             <div style={{ background: "linear-gradient(135deg,#1a1a2e,#0f3460)", color: "white", padding: "14px 20px" }}>
               <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}><Plus size={15} style={{ marginRight: 6 }} />Add User</h3>

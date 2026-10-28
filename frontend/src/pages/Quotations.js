@@ -199,7 +199,7 @@ function QuoteEditor({ quote, clients, onClose, onSaved }) {
         <div style={{ padding: 22 }}>
           {msg && <div style={{ background: msg.startsWith("✅") ? "#d1f5ea" : "#ffe0e3", color: msg.startsWith("✅") ? "#1b5e20" : "#b71c1c", borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: 13, fontWeight: 600 }}>{msg}</div>}
 
-          <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 24, alignItems: "start" }}>
+          <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 24, alignItems: "start" }}>
             <div>
               {/* product reference image */}
               <div style={{ marginBottom: 16 }}>

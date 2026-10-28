@@ -200,7 +200,7 @@ function SuppliersTab({ suppliers, reload, isAdmin }) {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,400px) 1fr", gap: 20, alignItems: "start" }}>
+    <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(300px,400px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={S.card}>
         <div style={S.header}><h3 style={S.h3}><Plus size={15} /> {editId ? "Edit Supplier" : "New Supplier / Vendor"}</h3></div>
         <form onSubmit={submit} style={{ padding: 20 }}>
@@ -344,7 +344,7 @@ function FabricsTab({ fabrics, reload, isAdmin, suppliers, reloadSuppliers }) {
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(280px,380px) 1fr", gap: 20, alignItems: "start" }}>
+    <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(280px,380px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={S.card}>
         <div style={S.header}><h3 style={S.h3}><Plus size={15} /> New Fabric</h3></div>
         <form onSubmit={submit} style={{ padding: 20 }}>
@@ -569,7 +569,7 @@ function PurchaseTab({ fabrics, purchases, reload, isAdmin, suppliers, reloadSup
   };
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(320px,480px) 1fr", gap: 20, alignItems: "start" }}>
+    <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(320px,480px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={S.card}>
         <div style={{ ...S.header, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h3 style={S.h3}>{editId ? <><Pencil size={15} /> Edit Purchase Bill</> : <><Truck size={15} /> Record Purchase Bill</>}</h3>
@@ -883,7 +883,7 @@ function DefectiveTab({ defective, reload, isAdmin }) {
   const showDebit = form.decision === "return" || form.decision === "downgrade";
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: resolving ? "minmax(300px,400px) 1fr" : "1fr", gap: 20, alignItems: "start" }}>
+    <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: resolving ? "minmax(300px,400px) 1fr" : "1fr", gap: 20, alignItems: "start" }}>
       {resolving && (
         <div style={S.card}>
           <div style={S.header}><h3 style={S.h3}>Resolve — {resolving.lot_code} ({resolving.fabric_name})</h3></div>
@@ -1040,7 +1040,7 @@ function JobWorkTab({ fabrics, jobWork, reload, isAdmin, suppliers, reloadSuppli
   const pending = jobWork.filter(j => j.status === "sent");
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(280px,380px) 1fr", gap: 20, alignItems: "start" }}>
+    <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(280px,380px) 1fr", gap: 20, alignItems: "start" }}>
       <div style={S.card}>
         <div style={S.header}><h3 style={S.h3}><PackageCheck size={15} /> Send to Job Work</h3></div>
         <form onSubmit={send} style={{ padding: 20 }}>

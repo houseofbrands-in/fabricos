@@ -78,7 +78,7 @@ export default function Cutting() {
       <h2 style={{ fontWeight: 900, marginBottom: 4 }}>Cutting Station</h2>
       <p style={{ color: "#6c757d", marginBottom: 20, fontSize: 14 }}>Cut per size and generate bundle QR codes</p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 20, alignItems: "start" }}>
+      <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 20, alignItems: "start" }}>
         <div style={{ background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" }}>
           <div style={{ background: "linear-gradient(135deg,#1a1a2e,#0f3460)", color: "white", padding: "14px 16px" }}>
             <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700 }}>Select Design</h3>

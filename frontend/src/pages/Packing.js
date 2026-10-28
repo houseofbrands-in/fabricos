@@ -105,7 +105,7 @@ export default function Packing() {
       </div>
 
       {view === "scan" && (
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,440px) 1fr", gap: 20, alignItems: "start" }}>
+        <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(300px,440px) 1fr", gap: 20, alignItems: "start" }}>
 
           {/* Scan + Form */}
           <div style={{ background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" }}>

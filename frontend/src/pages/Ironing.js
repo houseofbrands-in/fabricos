@@ -54,7 +54,7 @@ export default function Ironing() {
         {pending.length} bundles ready for ironing
       </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,420px) 1fr", gap: 20, alignItems: "start" }}>
+      <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(300px,420px) 1fr", gap: 20, alignItems: "start" }}>
 
         {/* Scan + Confirm */}
         <div style={{ background: "white", borderRadius: 16, boxShadow: "0 2px 12px rgba(0,0,0,0.06)", overflow: "hidden" }}>

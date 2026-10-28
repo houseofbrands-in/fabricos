@@ -198,7 +198,7 @@ function DispatchEditor({ d, stock, onClose, onSaved }) {
           {msg && <div style={{ background: msg.startsWith("✅") ? "#d1f5ea" : "#ffe0e3", color: msg.startsWith("✅") ? "#1b5e20" : "#b71c1c", borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 13, fontWeight: 600 }}>{msg}</div>}
           {dispatched && <div style={{ background: "#d1f5ea", color: "#1b5e20", borderRadius: 8, padding: "8px 12px", marginBottom: 12, fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><CheckCircle size={15} /> Dispatched — stock has been deducted. This record is now read-only.</div>}
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+          <div className="fx-2up" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
             <div><label style={lab}>Transporter / courier</label><input style={inp} disabled={dispatched} value={D.transporter} onChange={e => set("transporter", e.target.value)} /></div>
             <div><label style={lab}>AWB / LR no.</label><input style={inp} disabled={dispatched} value={D.awb} onChange={e => set("awb", e.target.value)} /></div>
             <div><label style={lab}>Boxes</label><input style={inp} type="number" disabled={dispatched} value={D.box_count} onChange={e => set("box_count", e.target.value)} /></div>
@@ -208,7 +208,7 @@ function DispatchEditor({ d, stock, onClose, onSaved }) {
 
           <div style={{ fontWeight: 800, fontSize: 13, color: "#283593", marginBottom: 6 }}>ITEMS TO SHIP</div>
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
+            <table className="fx-rows" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
               <thead><tr style={{ background: "#f8f9fc" }}>{["Item / Size", "Warehouse SKU", "Avail", "Pending", "Ship qty", "Carton", "Rate", "Amount"].map(h => <th key={h} style={{ ...S.th, padding: "8px 8px" }}>{h}</th>)}</tr></thead>
               <tbody>
                 {D.lines.map((l, i) => {
@@ -216,28 +216,28 @@ function DispatchEditor({ d, stock, onClose, onSaved }) {
                   const over = a != null && num(l.qty) > a;
                   return (
                     <tr key={i} style={{ borderTop: "1px solid #f0f0f0" }}>
-                      <td style={{ padding: "6px 8px" }}><div style={{ fontFamily: "monospace", fontWeight: 700 }}>{l.item_code || "—"}</div><div style={{ fontSize: 11, color: "#6c757d" }}>{l.description} {l.colour} {l.size && `· ${l.size}`}</div></td>
-                      <td style={{ padding: 4 }}>
+                      <td className="fx-full" style={{ padding: "6px 8px" }}><div style={{ fontFamily: "monospace", fontWeight: 700 }}>{l.item_code || "—"}</div><div style={{ fontSize: 11, color: "#6c757d" }}>{l.description} {l.colour} {l.size && `· ${l.size}`}</div></td>
+                      <td className="fx-full" style={{ padding: 4 }}>
                         <select style={{ ...inp, padding: "6px 7px", minWidth: 150 }} disabled={dispatched} value={l.master_id || ""} onChange={e => setLine(i, "master_id", e.target.value)}>
                           <option value="">Pick SKU…</option>
                           {stock.map(s => <option key={s.id} value={s.id}>{s.sku_code}{s.size ? ` (${s.size})` : ""} · {s.sellable}</option>)}
                         </select>
                       </td>
-                      <td style={{ padding: "6px 8px", fontWeight: 700, color: a === 0 ? "#b71c1c" : "#1b5e20" }}>{a == null ? "—" : a}</td>
-                      <td style={{ padding: "6px 8px", color: "#6c757d" }}>{l.pending == null ? "—" : l.pending}</td>
-                      <td style={{ padding: 4 }}><input style={{ ...inp, padding: "6px 7px", width: 80, borderColor: over ? "#e94560" : "#dee2e6" }} type="number" min="0" disabled={dispatched} value={l.qty} onChange={e => setLine(i, "qty", e.target.value)} />{over && <div style={{ fontSize: 10, color: "#e94560", fontWeight: 700 }}>&gt; stock</div>}</td>
-                      <td style={{ padding: 4 }}><input style={{ ...inp, padding: "6px 7px", width: 70 }} disabled={dispatched} value={l.carton_no} onChange={e => setLine(i, "carton_no", e.target.value)} placeholder="C1" /></td>
-                      <td style={{ padding: 4 }}><input style={{ ...inp, padding: "6px 7px", width: 80 }} type="number" step="0.01" disabled={dispatched} value={l.rate} onChange={e => setLine(i, "rate", e.target.value)} /></td>
-                      <td style={{ padding: "6px 8px", fontWeight: 700, whiteSpace: "nowrap" }}>{money(num(l.qty) * num(l.rate))}</td>
+                      <td data-label="Avail" style={{ padding: "6px 8px", fontWeight: 700, color: a === 0 ? "#b71c1c" : "#1b5e20" }}>{a == null ? "—" : a}</td>
+                      <td data-label="Pending" style={{ padding: "6px 8px", color: "#6c757d" }}>{l.pending == null ? "—" : l.pending}</td>
+                      <td data-label="Ship qty" style={{ padding: 4 }}><input style={{ ...inp, padding: "6px 7px", width: 80, borderColor: over ? "#e94560" : "#dee2e6" }} type="number" min="0" disabled={dispatched} value={l.qty} onChange={e => setLine(i, "qty", e.target.value)} />{over && <div style={{ fontSize: 10, color: "#e94560", fontWeight: 700 }}>&gt; stock</div>}</td>
+                      <td data-label="Carton" style={{ padding: 4 }}><input style={{ ...inp, padding: "6px 7px", width: 70 }} disabled={dispatched} value={l.carton_no} onChange={e => setLine(i, "carton_no", e.target.value)} placeholder="C1" /></td>
+                      <td data-label="Rate" style={{ padding: 4 }}><input style={{ ...inp, padding: "6px 7px", width: 80 }} type="number" step="0.01" disabled={dispatched} value={l.rate} onChange={e => setLine(i, "rate", e.target.value)} /></td>
+                      <td data-label="Amount" style={{ padding: "6px 8px", fontWeight: 700, whiteSpace: "nowrap" }}>{money(num(l.qty) * num(l.rate))}</td>
                     </tr>
                   );
                 })}
               </tbody>
               <tfoot><tr style={{ background: "#f8f9fc", borderTop: "2px solid #dee2e6", fontWeight: 800 }}>
                 <td colSpan={4} style={{ padding: "8px 8px" }}>Total</td>
-                <td style={{ padding: "8px 8px" }}>{totalQty}</td>
+                <td data-label="Qty" style={{ padding: "8px 8px" }}>{totalQty}</td>
                 <td colSpan={2}></td>
-                <td style={{ padding: "8px 8px" }}>{money(totalAmt)}</td>
+                <td data-label="Amount" style={{ padding: "8px 8px" }}>{money(totalAmt)}</td>
               </tr></tfoot>
             </table>
           </div>

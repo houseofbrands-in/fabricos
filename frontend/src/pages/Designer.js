@@ -59,7 +59,7 @@ export default function Designer() {
       <h2 style={{ fontWeight: 900, marginBottom: 4 }}>Design Studio</h2>
       <p style={{ color: "#6c757d", marginBottom: 20, fontSize: 14 }}>Create product designs and set stitching rates</p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(300px,420px) 1fr", gap: 20, alignItems: "start" }}>
+      <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "minmax(300px,420px) 1fr", gap: 20, alignItems: "start" }}>
 
         {/* Create Form */}
         <div style={S.card}>
@@ -285,7 +285,7 @@ function CostSheetModal({ design, onClose }) {
         <div style={{ padding: 22 }}>
           {msg && <div style={{ background: msg.startsWith("✅") ? "#d1f5ea" : "#ffe0e3", color: msg.startsWith("✅") ? "#1b5e20" : "#b71c1c", borderRadius: 8, padding: "8px 12px", marginBottom: 14, fontSize: 13, fontWeight: 600 }}>{msg}</div>}
 
-          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 24, alignItems: "start" }}>
+          <div className="fx-stack" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 24, alignItems: "start" }}>
             {/* LEFT: inputs */}
             <div>
               <div style={{ fontWeight: 800, fontSize: 13, color: "#283593", marginBottom: 8 }}>FABRIC & STITCHING</div>
