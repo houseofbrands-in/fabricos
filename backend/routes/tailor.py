@@ -118,6 +118,9 @@ def tailor_history(
             "submitted_at": j.submitted_at.isoformat() if j.submitted_at else None,
         })
     return out
+
+
+@router.get("/dashboard")
 def tailor_dashboard(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles("tailor")),
